@@ -10,10 +10,13 @@ across both the current Streamable HTTP transport and the legacy HTTP+SSE transp
 After completing the MCP `initialize` handshake the script invokes the read-only listing
 methods `tools/list`, `resources/list`, `resources/templates/list`, and `prompts/list`.
 It reports each tool's name, description, and input-parameter names; resource URIs; and
-prompt names. Tool names/descriptions are matched against a heuristic of dangerous
-capabilities (shell/exec, file read/write/delete, SQL/database, outbound HTTP, secrets)
-and flagged. If the server answered the handshake with no authentication, an
-unauthenticated-exposure security finding is emitted.
+prompt names. Each tool is risk-assessed across its name, description, AND its JSON input
+schema -- free-form parameters (string/array/object without an enum) named or described
+like commands, file paths, URLs/hosts, SQL, or secrets are flagged even when the tool's
+name and description look benign. Findings are bucketed into categories (code-exec,
+file-access, network/ssrf, sql/db, secrets, privileged); risk-contributing parameters are
+marked with a trailing `*`. If the server answered the handshake with no authentication,
+an unauthenticated-exposure security finding is emitted.
 
 Transport handling (shared with the `mcp` nselib):
 * Streamable HTTP - carries any issued `Mcp-Session-Id` and the negotiated
@@ -42,13 +45,13 @@ executed. Run `mcp-info` first/alongside for transport and version fingerprintin
 -- |   transport: streamable-http
 -- |   server: acme-toolserver 1.4.2 (protocol 2025-06-18)
 -- |   tools (4):
--- |     run_command [!! DANGEROUS] - Execute a shell command on the host  (params: cmd)
--- |     read_file [!! DANGEROUS] - Read a file from disk  (params: path)
+-- |     run_command [!! RISK: code-exec] - Execute a shell command on the host  (params: cmd*)
+-- |     read_file [!! RISK: file-access] - Read a file from disk  (params: path*)
 -- |     search_web - Search the web  (params: q)
 -- |     get_weather - Get the weather for a city  (params: city)
 -- |   resources (2): file:///etc/, db://customers
 -- |   prompts (1): summarize
--- |_  SECURITY: unauthenticated server exposes 2 dangerous tool(s): run_command, read_file
+-- |_  SECURITY: unauthenticated server exposes 2 risky tool(s) [code-exec, file-access]: run_command, read_file
 
 author = "ben.williams@nccgroup.com"
 license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
@@ -78,12 +81,19 @@ action = function(host, port)
     local lines = {}
     for _, t in ipairs(data.tools) do
       local line = t.name
-      if t.dangerous then line = line .. " [!! DANGEROUS]" end
+      if t.dangerous then
+        line = line .. " [!! RISK: " .. table.concat(t.categories, ", ") .. "]"
+      end
       if t.description ~= "" then line = line .. " - " .. t.description:gsub("%s+", " ") end
       if opts.schemas and t.schema then
         line = line .. "  schema=" .. (mcp.gen(t.schema) or "?")
       elseif #t.params > 0 then
-        line = line .. "  (params: " .. table.concat(t.params, ", ") .. ")"
+        -- mark risk-contributing params with a trailing *
+        local marked = {}
+        for _, p in ipairs(t.params) do
+          marked[#marked + 1] = (t.risky_params and t.risky_params[p]) and (p .. "*") or p
+        end
+        line = line .. "  (params: " .. table.concat(marked, ", ") .. ")"
       end
       lines[#lines + 1] = line
     end
@@ -99,9 +109,11 @@ action = function(host, port)
 
   if not data.authenticated then
     if #data.dangerous > 0 then
+      local cats = (data.categories and #data.categories > 0)
+        and (" [" .. table.concat(data.categories, ", ") .. "]") or ""
       out.SECURITY = string.format(
-        "unauthenticated server exposes %d dangerous tool(s): %s",
-        #data.dangerous, table.concat(data.dangerous, ", "))
+        "unauthenticated server exposes %d risky tool(s)%s: %s",
+        #data.dangerous, cats, table.concat(data.dangerous, ", "))
     else
       out.SECURITY = "unauthenticated MCP server (no credentials required to enumerate)"
     end

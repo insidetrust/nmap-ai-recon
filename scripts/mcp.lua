@@ -50,15 +50,41 @@ local PORTS_SET = {}
 for _, p in ipairs(PORTS) do PORTS_SET[p] = true end
 
 -- Heuristic substrings marking a tool as security-relevant attack surface.
--- Deliberately specific to limit false positives on benign verbs (plain
--- "query"/"url"/"fetch" are intentionally excluded).
-DANGEROUS = {
-  "exec", "shell", "command", "cmd", "spawn", "subprocess", "system", "bash",
-  "powershell", "eval", "write_file", "writefile", "delete", "unlink", "rmdir",
-  "sql", "database", "psql", "read_file", "readfile", "file_read", "read_path",
-  "http_request", "fetch_url", "request_url", "ssrf", "upload", "download",
-  "ssh", "kubectl", "terraform", "sudo", "secret", "credential", "private_key",
-  "api_key", "password", "environment variable", "getenv", "dotenv",
+-- A tool's risk is assessed across its name, description, AND its JSON input schema
+-- (parameter names/descriptions/types), bucketed into categories. Two pattern maps are
+-- used: TEXT_RISK matches conservative phrases in free text (name + descriptions);
+-- PARAM_RISK matches tokens in tool-name / parameter-name identifiers (exact word-token
+-- match, so "file" hits "gzip-file" but not "profile"). Only plausibly free-form
+-- parameters (string/array/object, no enum) contribute parameter risk.
+
+-- Substrings in NAME or DESCRIPTION text implying a capability (kept specific).
+TEXT_RISK = {
+  ["code-exec"]    = { "exec", "shell", "command", "subprocess", "bash", "powershell",
+                       "eval", "arbitrary code", "interpreter", "run a command" },
+  ["file-access"]  = { "read_file", "write_file", "file_read", "readfile", "writefile",
+                       "read a file", "write a file", "filesystem", "delete", "unlink",
+                       "rmdir" },
+  ["network/ssrf"] = { "http_request", "fetch_url", "request_url", "ssrf", "make a request",
+                       "outbound", "webhook", "send a request" },
+  ["sql/db"]       = { "sql", "database", "psql" },
+  ["secrets"]      = { "secret", "credential", "private_key", "api_key", "password",
+                       "environment variable", "getenv", "dotenv" },
+  ["privileged"]   = { "sudo", "kubectl", "terraform", "docker", "deploy" },
+}
+
+-- Word-tokens in tool-name / parameter-name identifiers implying risky input.
+PARAM_RISK = {
+  ["code-exec"]    = { "cmd", "command", "exec", "script", "code", "eval", "program",
+                       "shell" },
+  ["file-access"]  = { "path", "file", "filename", "filepath", "dir", "directory",
+                       "folder" },
+  ["network/ssrf"] = { "url", "uri", "endpoint", "host", "hostname", "address",
+                       "webhook", "callback", "target" },
+  -- "query" intentionally excluded: it usually means a search query, not SQL.
+  ["sql/db"]       = { "sql", "statement" },
+  ["secrets"]      = { "token", "secret", "password", "apikey", "credential", "env",
+                       "key" },
+  ["privileged"]   = { "ssh", "sudo", "kubectl", "docker" },
 }
 
 --------------------------------------------------------------------------------
@@ -137,14 +163,78 @@ function gen(obj)
   return ok and s or nil
 end
 
-function is_dangerous(name, desc)
-  local hay = ((name or "") .. " " .. (desc or "")):lower()
-  for _, pat in ipairs(DANGEROUS) do
-    if hay:find(pat, 1, true) then
-      return true
+-- Tokenize an identifier/string into a set of lowercase word-tokens, splitting on
+-- non-alphanumerics and camelCase boundaries ("filePath" -> {file, path}).
+local function tokenize(s)
+  local set = {}
+  if not s then return set end
+  s = s:gsub("(%l)(%u)", "%1 %2"):gsub("(%u)(%u%l)", "%1 %2")
+  for t in s:lower():gmatch("[%a%d]+") do set[t] = true end
+  return set
+end
+
+-- Match TEXT_RISK phrase patterns against free text, recording hit categories in `into`.
+local function match_text_risk(text, into)
+  local hay = (text or ""):lower()
+  for cat, pats in pairs(TEXT_RISK) do
+    if not into[cat] then
+      for _, p in ipairs(pats) do
+        if hay:find(p, 1, true) then into[cat] = true; break end
+      end
     end
   end
-  return false
+end
+
+-- Match PARAM_RISK tokens against an identifier's token set, recording categories.
+local function match_param_risk(identifier, into)
+  local toks = tokenize(identifier)
+  local matched = false
+  for cat, pats in pairs(PARAM_RISK) do
+    for _, p in ipairs(pats) do
+      if toks[p] then into[cat] = true; matched = true; break end
+    end
+  end
+  return matched
+end
+
+-- A parameter contributes risk only if it can carry free-form input: a string/array/
+-- object without an enum (numbers/booleans/enums are constrained, so far lower risk).
+local function param_is_freeform(prop)
+  if type(prop) ~= "table" then return true end
+  if prop.enum ~= nil then return false end
+  local t = prop.type
+  return t ~= "integer" and t ~= "number" and t ~= "boolean"
+end
+
+-- Assess a tool across name, description, and input schema. Returns
+-- { dangerous = bool, categories = {sorted}, params = {risky param name -> true} }.
+function assess_tool(tool)
+  local cats, risky = {}, {}
+  match_text_risk((tool.name or "") .. " " .. (tool.description or ""), cats)
+  match_param_risk(tool.name or "", cats)
+
+  local schema = type(tool.inputSchema) == "table" and tool.inputSchema or nil
+  local props = schema and type(schema.properties) == "table" and schema.properties or nil
+  if props then
+    for pname, prop in pairs(props) do
+      if param_is_freeform(prop) then
+        if match_param_risk(pname, cats) then risky[pname] = true end
+        if type(prop) == "table" and prop.description then
+          match_text_risk(prop.description, cats)
+        end
+      end
+    end
+  end
+
+  local list = {}
+  for c in pairs(cats) do list[#list + 1] = c end
+  table.sort(list)
+  return { dangerous = #list > 0, categories = list, params = risky }
+end
+
+-- Back-compat shim.
+function is_dangerous(name, desc)
+  return assess_tool({ name = name, description = desc }).dangerous
 end
 
 -- JSON-RPC params per method. `initialize` MUST carry protocolVersion + clientInfo;
@@ -478,8 +568,9 @@ function connect(host, port, opts)
 end
 
 -- Read-only attack-surface enumeration over an open transport. Returns a data table:
--- { transport, server_info, protocol, authenticated, tools=[{name,description,params,
---   dangerous,schema}], resources=[uri], prompts=[name], dangerous=[name] }.
+-- { transport, server_info, protocol, authenticated,
+--   tools=[{name,description,params,dangerous,categories,risky_params,schema}],
+--   resources=[uri], prompts=[name], dangerous=[name], categories=[sorted] }.
 function enumerate(transport, opts)
   opts = opts or args()
   local data = {
@@ -489,9 +580,10 @@ function enumerate(transport, opts)
     authenticated = transport.authenticated,
     tools = {}, resources = {}, prompts = {}, dangerous = {},
   }
+  local cat_set = {}
 
   for _, tdef in ipairs(list_array(transport:request("tools/list", 2), "tools") or {}) do
-    local danger = is_dangerous(tdef.name, tdef.description)
+    local risk = assess_tool(tdef)
     local params = {}
     if type(tdef.inputSchema) == "table" and type(tdef.inputSchema.properties) == "table" then
       for p in pairs(tdef.inputSchema.properties) do params[#params + 1] = p end
@@ -501,11 +593,19 @@ function enumerate(transport, opts)
       name = tdef.name or "?",
       description = tdef.description or "",
       params = params,
-      dangerous = danger,
+      dangerous = risk.dangerous,
+      categories = risk.categories,
+      risky_params = risk.params,
       schema = tdef.inputSchema,
     }
-    if danger then data.dangerous[#data.dangerous + 1] = tdef.name or "?" end
+    if risk.dangerous then
+      data.dangerous[#data.dangerous + 1] = tdef.name or "?"
+      for _, c in ipairs(risk.categories) do cat_set[c] = true end
+    end
   end
+  data.categories = {}
+  for c in pairs(cat_set) do data.categories[#data.categories + 1] = c end
+  table.sort(data.categories)
 
   for _, r in ipairs(list_array(transport:request("resources/list", 3), "resources") or {}) do
     data.resources[#data.resources + 1] = r.uri or r.name or "?"

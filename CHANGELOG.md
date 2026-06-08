@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.0 — 2026-06-08 (input-schema risk analysis)
+- Dangerous-tool detection now assesses each tool across its name, description, **and JSON
+  input schema**: free-form parameters (string/array/object, no enum) named/described like
+  commands, paths, URLs/hosts, SQL, or secrets are flagged even when the tool name and
+  description look benign. Constrained params (enums, numbers, booleans) are ignored.
+- Findings are **categorised** (code-exec, file-access, network/ssrf, sql/db, secrets,
+  privileged); risk-contributing parameters are marked with `*` in the output, and the
+  SECURITY summary lists the aggregate categories.
+- Tightened SQL detection (dropped ambiguous bare "query") to remove a false positive on
+  search/research tools. Validated against FastMCP (incl. a benign-named tool flagged
+  purely on its schema) and `server-everything`.
+
 ## 0.4.0 — 2026-06-08 (M4: submission package)
 - Added `WRITEUP.md` (research/advisory write-up) and `SUBMISSION.md` (Nmap PR package +
   conformance checklist).

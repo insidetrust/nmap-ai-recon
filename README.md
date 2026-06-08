@@ -14,7 +14,7 @@ open, free, CLI-native equivalent. See [`PRD.md`](PRD.md) for the spec/roadmap a
 | File | Category | What it does |
 |--------|----------|--------------|
 | `scripts/mcp-info.nse` | `discovery, safe, version` | Detects MCP over HTTP(S) via the JSON-RPC `initialize` handshake (Streamable HTTP) with a legacy HTTP+SSE fallback and OAuth metadata parsing. Reports transport, endpoint, server name/version, protocol version, capabilities, session statefulness, and auth posture. Feeds `-sV`. |
-| `scripts/mcp-enum.nse` | `discovery, safe` | Completes the handshake then calls `tools/list`, `resources/list`, `resources/templates/list`, `prompts/list`. Lists tools/params, resources, prompts; flags **dangerous tools** and **unauthenticated exposure**. |
+| `scripts/mcp-enum.nse` | `discovery, safe` | Completes the handshake then calls `tools/list`, `resources/list`, `resources/templates/list`, `prompts/list`. Lists tools/params, resources, prompts; **risk-assesses each tool across its name, description, and JSON input schema** (categorised: code-exec / file-access / network-ssrf / sql-db / secrets / privileged), and flags **unauthenticated exposure**. |
 | `scripts/mcp.lua` | nselib | Shared library: both transports (raw-socket), the handshake, OAuth discovery, and enumeration. Must be installed into nmap's `nselib/`. |
 
 Both scripts are **read-only**: they issue only the protocol handshake and `*/list`
@@ -117,15 +117,21 @@ PORT     STATE SERVICE
 |_  auth: NONE (unauthenticated)
 | mcp-enum:
 |   server: acme-toolserver 1.4.2 (protocol 2025-06-18)
-|   tools (4):
-|     run_command [!! DANGEROUS] - Execute a shell command on the host  (params: cmd)
-|     read_file [!! DANGEROUS] - Read a file from disk  (params: path)
+|   tools (5):
+|     run_command [!! RISK: code-exec] - Execute a shell command on the host  (params: cmd*)
+|     read_file [!! RISK: file-access] - Read a file from disk  (params: path*)
+|     process [!! RISK: file-access, network/ssrf] - Process the input data  (params: count, output_path*, target_url*)
 |     search_web - Search the web for a query  (params: q)
 |     get_weather - Get the weather for a city  (params: city)
 |   resources (3): file:///etc/, db://customers, file:///{path} (template)
 |   prompts (1): summarize
-|_  SECURITY: unauthenticated server exposes 2 dangerous tool(s): run_command, read_file
+|_  SECURITY: unauthenticated server exposes 3 risky tool(s) [code-exec, file-access, network/ssrf]: run_command, read_file, process
 ```
+
+Risk is assessed across the tool name, description, **and JSON input schema**: `process`
+above has a benign name/description but is flagged purely from its `output_path` and
+`target_url` parameters (the constrained integer `count` is ignored). Risk-contributing
+parameters are marked `*`.
 
 ## Testing
 

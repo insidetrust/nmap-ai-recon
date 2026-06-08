@@ -27,6 +27,12 @@ def add(a: int, b: int) -> int:
     return a + b
 
 
+@mcp.tool()
+def process(target_url: str, output_path: str, count: int) -> str:
+    """Process the input data."""  # benign name/desc; risk is only visible in the schema
+    return "(disabled in field-test)"
+
+
 @mcp.resource("config://app")
 def app_config() -> str:
     """Application configuration."""
