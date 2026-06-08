@@ -1,0 +1,43 @@
+# nmap-service-probes fragment for Model Context Protocol (MCP) servers.
+#
+# These probes let `nmap -sV` identify MCP servers WITHOUT --script, by sending the
+# JSON-RPC `initialize` handshake (Streamable HTTP) and a GET /sse probe (legacy
+# HTTP+SSE), then matching the server's response.
+#
+# Install: append these lines to nmap's nmap-service-probes data file, e.g.
+#     cat nmap-service-probes.mcp | sudo tee -a /usr/share/nmap/nmap-service-probes
+# or run nmap with a custom data dir containing a full nmap-service-probes that
+# includes these lines:  nmap --datadir /path/to/dir -sV <target>
+#
+# Notes:
+#  * The Content-Length below (149) MUST match the JSON body byte-for-byte.
+#  * Probe rarity is 7 so it runs at the default -sV intensity; use --version-all
+#    (intensity 9) to force it on non-listed ports.
+#  * Append these *after* the existing "Probe" entries in the file. Each Probe's
+#    match/softmatch lines must immediately follow its Probe directive.
+
+##############################################################################
+# Streamable HTTP transport: POST initialize handshake
+##############################################################################
+Probe TCP MCPInitialize q|POST /mcp HTTP/1.1\r\nHost: nmap\r\nUser-Agent: nmap-mcp\r\nContent-Type: application/json\r\nAccept: application/json, text/event-stream\r\nContent-Length: 149\r\nConnection: close\r\n\r\n{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"nmap","version":"1"}}}|
+rarity 7
+ports 3000,3001,5000,6274,8000,8080,8081,8888,9000
+
+# Full match: capture serverInfo name + version (order-tolerant within the object).
+match mcp m|"serverInfo"\s*:\s*\{[^}]*"name"\s*:\s*"([^"]+)"[^}]*"version"\s*:\s*"([^"]+)"|s p/$1/ v/$2/ i/Model Context Protocol server/ cpe:/a:modelcontextprotocol:mcp/
+# serverInfo in the other field order.
+match mcp m|"serverInfo"\s*:\s*\{[^}]*"version"\s*:\s*"([^"]+)"[^}]*"name"\s*:\s*"([^"]+)"|s p/$2/ v/$1/ i/Model Context Protocol server/ cpe:/a:modelcontextprotocol:mcp/
+# Softmatch: JSON-RPC initialize result without parseable serverInfo.
+softmatch mcp m|"jsonrpc"\s*:\s*"2\.0".*"protocolVersion"\s*:\s*"([0-9-]+)"|s i/MCP protocol $1/
+# Auth-gated MCP server advertising OAuth protected-resource metadata.
+match mcp m|WWW-Authenticate:\s*Bearer[^\r\n]*resource_metadata|s i/MCP server, OAuth-protected/ cpe:/a:modelcontextprotocol:mcp/
+
+##############################################################################
+# Legacy HTTP+SSE transport: GET /sse returns an `endpoint` event
+##############################################################################
+Probe TCP MCPLegacySSE q|GET /sse HTTP/1.1\r\nHost: nmap\r\nUser-Agent: nmap-mcp\r\nAccept: text/event-stream\r\nConnection: close\r\n\r\n|
+rarity 7
+ports 3000,3001,5000,6274,8000,8080,8081,8888,9000
+
+match mcp m|event:\s*endpoint\s+data:\s*(\S+)|s i/MCP legacy HTTP+SSE, endpoint $1/ cpe:/a:modelcontextprotocol:mcp/
+softmatch mcp m|Content-Type:\s*text/event-stream|s i/MCP legacy HTTP+SSE (probable)/

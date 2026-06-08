@@ -1,0 +1,10 @@
+# local test/runtime artifacts
+*.log
+/tmp/
+__pycache__/
+*.pyc
+.venv/
+mcpvenv/
+# editor
+*.swp
+.DS_Store
