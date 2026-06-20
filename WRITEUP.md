@@ -130,6 +130,5 @@ Findings (unauthenticated access, dangerous tools) are reported, not exploited.
 
 ## Future work
 
-- Optional, clearly-flagged input-schema risk analysis (params that take raw paths/commands).
-- `nmap-service-probes` upstreaming so bare `-sV` flags MCP without the script.
+- Upstream a `nmap-service-probes` entry so bare `-sV` flags MCP without the script.
 - Coverage for additional frameworks and auth schemes as the ecosystem evolves.

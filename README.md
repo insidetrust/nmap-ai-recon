@@ -32,15 +32,10 @@ Live public servers (read-only `initialize` + `*/list`):
   authorization server and scopes discovered from RFC 9728 metadata, unauthenticated
 - **OAuth-protected production server** (CloudFront-fronted) - same, unauthenticated
 
-Hardening these field tests forced (all handled automatically):
-- nmap's `http.post` **hangs** on servers that keep the SSE response stream open
-  (FastMCP/uvicorn), so the transport uses **raw sockets**, reading only until the
-  JSON-RPC reply arrives.
-- **TLS auto-fallback**: tries the heuristically-preferred mode, falls back on the other.
-- **Host header includes the port** - MCP servers validate it for DNS-rebinding protection
-  and return `421` otherwise.
-- **`initialize` sends `protocolVersion` + `clientInfo`** - strict servers reject empty
-  params with `-32602`.
+Real servers forced hardening, all automatic: a **raw-socket transport** (nmap's
+`http.post` hangs on FastMCP/uvicorn, which hold the SSE stream open after replying),
+**TLS auto-fallback**, a **port-qualified Host header** (servers return `421` otherwise),
+and valid `initialize` params (strict servers reject empty params with `-32602`).
 
 ## Usage
 
@@ -124,12 +119,6 @@ name/version - the version-category script overrides the generic `http` match vi
 (useful on ports not already hard-matched as HTTP); for MCP-over-HTTP the script override
 is the authoritative path because nmap's HTTP probe hard-matches first.
 
-### Prior art / how this differs
-No open nmap or Metasploit capability scans MCP *services* (their "MCP" projects wrap the
-tool *as* an MCP server). Tenable **Web App Scanning** does cover it (plugins 114790 /
-114791 / 114965, "Artificial Intelligence" family, 2025). This project is the free,
-scriptable, CLI-native equivalent for any engagement.
-
 ## Example output
 
 ```
@@ -163,46 +152,32 @@ parameters are marked `*`.
 
 ## Testing
 
-All examples assume the lib is reachable; either install it or use the `--datadir`
-harness shown above (commands below omit `--datadir` for brevity).
+Either install the lib or use the `--datadir` harness above (omitted below for brevity).
 
-**Regression matrix** - the quickest check. `test/run_matrix.sh` brings up the mock in
-several configurations and asserts the expected output across protocol versions, all three
-transports, both auth states, and tools/resources/prompts content (23 checks):
+**Regression matrix** (fastest check) drives the mock across protocol versions, all three
+transports, and both auth states, asserting the expected output (23 checks):
 
 ```bash
-test/run_matrix.sh        # exits non-zero if any cell fails
+test/run_matrix.sh        # exits non-zero on any failure
 ```
 
-**Mock server** (dependency-free) exercises every transport + the OAuth path. The
-advertised MCP protocol version is overridable to test version negotiation:
+**Mock server** (dependency-free) for ad-hoc probing; `MCP_PROTOCOL` overrides the
+advertised protocol version:
 
 ```bash
 python3 test/mock_mcp_server.py 8000 &
-nmap -sT -Pn -p 8000 --script "mcp-info,mcp-enum" 127.0.0.1                       # streamable JSON
-nmap -sT -Pn -p 8000 --script mcp-info --script-args mcp.paths=/mcpsse 127.0.0.1  # SSE-framed
-nmap -sT -Pn -p 8000 --script mcp-info --script-args mcp.paths=/nope 127.0.0.1    # legacy fallback
-nmap -sT -Pn -p 8000 --script mcp-info --script-args mcp.paths=/authmcp 127.0.0.1 # OAuth-gated (discovery)
-# authenticated enumeration of the OAuth-gated endpoint:
+nmap -sT -Pn -p 8000 --script "mcp-info,mcp-enum" 127.0.0.1                       # streamable
+nmap -sT -Pn -p 8000 --script mcp-info --script-args mcp.paths=/sse 127.0.0.1     # legacy SSE
 nmap -sT -Pn -p 8000 --script "mcp-info,mcp-enum" \
-     --script-args mcp.paths=/authmcp,mcp.token=mock-test-token-abc123 127.0.0.1
-
-# protocol-version negotiation (the script reports whatever the server advertises):
-MCP_PROTOCOL=2024-11-05 python3 test/mock_mcp_server.py 8000 &
+     --script-args mcp.paths=/authmcp,mcp.token=mock-test-token-abc123 127.0.0.1  # authenticated
 ```
 
-**Real servers** (field tests):
+**Real frameworks:**
 
 ```bash
-# Official Python SDK (FastMCP)
-/tmp/mcpvenv/bin/pip install "mcp[cli]" uvicorn
-/tmp/mcpvenv/bin/python test/fastmcp_server.py 9001 &
-nmap -sT -Pn -p 9001 --script "mcp-info,mcp-enum" --script-args mcp.allports=true 127.0.0.1
-
-# Reference server, both transports
+pip install "mcp[cli]" uvicorn && python test/fastmcp_server.py 9001 &   # Python SDK
 PORT=9002 npx -y @modelcontextprotocol/server-everything streamableHttp &
-PORT=9003 npx -y @modelcontextprotocol/server-everything sse &
-nmap -sT -Pn -p 9002,9003 --script "mcp-info,mcp-enum" --script-args mcp.allports=true 127.0.0.1
+nmap -sT -Pn -p 9001,9002 --script "mcp-info,mcp-enum" --script-args mcp.allports=true 127.0.0.1
 ```
 
 Verified against nmap 7.94 (Lua 5.4).

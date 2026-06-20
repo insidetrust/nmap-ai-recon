@@ -184,24 +184,11 @@ auto-detected, so there is no force-https flag.
   tools) are reported, not exploited.
 
 ## 9. Milestones
-1. **M1:** PRD, `mcp-info.nse`, `mcp-enum.nse`, mock server, README, local verification
-   against the mock. **DONE**
-2. **M2:** legacy-SSE full enumeration (raw-socket transport, async response correlation);
-   `.well-known/oauth-protected-resource` parsing; `-sV` flags MCP (via version-category
-   `set_port_version` override; `nmap-service-probes.mcp` fragment as a supplement).
-   **DONE** - verified against the mock and against a real authorised target
-   (a managed OAuth-protected MCP service: the unauthenticated probe extracted the auth
-   server and scope). **Finding:** a User-Agent containing "nmap" is blocked by AWS WAF/CloudFront
-   (403 vs 401), so scripts now default to a neutral UA (`mcp.ua` to override).
-3. **M3:** refactor shared logic into the `mcp.lua` nselib; broaden path/port heuristics
-   (15 paths, common-port set, unrecognized-service heuristic, `mcp.allports`); field-test
-   against popular MCP frameworks. **DONE** - verified against the official Python SDK
-   (FastMCP), `@modelcontextprotocol/server-everything` in both `streamableHttp` and `sse`
-   modes, and the real OAuth target. Field-testing forced real-world hardening, all now
-   automatic: **raw-socket transport** (nmap's `http.post` hangs on FastMCP/uvicorn streamed
-   SSE), **TLS auto-fallback**, **Host header with port** (servers return `421` for
-   DNS-rebinding protection otherwise), and **correct `initialize` params** (strict servers
-   reject empty params with `-32602`).
-4. **M4:** upstream submission package (conformance pass, author/format alignment, live
-   field-testing against public servers). **DONE.** Opening the nmap PR + dev-list
-   notification is the remaining step.
+1. **M1** - PRD, both scripts, mock server, README, local verification. **DONE**
+2. **M2** - legacy-SSE enumeration (raw-socket async correlation), OAuth `resource_metadata`
+   parsing, `-sV` integration via `set_port_version`. **DONE**
+3. **M3** - shared `mcp.lua` nselib; broader path/port heuristics; field-testing that forced
+   the raw-socket transport, TLS auto-fallback, port-qualified Host header, and valid
+   `initialize` params (see `WRITEUP.md` for the detail). **DONE**
+4. **M4** - upstream submission package: conformance, format alignment, public field-testing.
+   **DONE**; opening the nmap PR + dev-list notification remains.
