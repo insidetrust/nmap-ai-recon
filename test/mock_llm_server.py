@@ -4,7 +4,8 @@
 One framework per process, selected by the LLM_MODE env var (default: ollama):
   ollama | openai | vllm | vllm_stealth | sglang | tgi | tei | llamacpp | koboldcpp
   | triton | torchserve | authed | anthropic
-  | openwebui | openwebui_open | librechat | nextchat | lobechat | flowise | anythingllm
+  | openwebui | openwebui_open | openwebui_onboarding | librechat | nextchat | lobechat
+  | flowise | anythingllm
 
 Usage:  LLM_MODE=vllm python3 mock_llm_server.py [port]      (default 8000)
 """
@@ -102,6 +103,10 @@ ROUTES = {
     # Open WebUI with authentication disabled entirely (WEBUI_AUTH=false): fully open access.
     "openwebui_open": {"/api/config": {"status": True, "name": "Open WebUI", "version": "0.5.20",
                                        "features": {"auth": False, "enable_signup": False}}},
+    # Open WebUI freshly deployed (onboarding true): no admin yet, first visitor claims admin.
+    "openwebui_onboarding": {"/api/config": {"status": True, "onboarding": True,
+                                             "name": "Open WebUI", "version": "0.9.6",
+                                             "features": {"auth": True, "enable_signup": True}}},
     "librechat": {"/api/config": {"appTitle": "LibreChat", "registrationEnabled": True,
                                   "emailLoginEnabled": True, "socialLogins": ["google", "github"],
                                   "serverDomain": "http://localhost:3080"}},

@@ -73,6 +73,9 @@ start openwebui_open; o=$(scan)
 check "openwebui auth-disabled detected" "framework: Open WebUI" "$o"
 check "openwebui open access" "access: open" "$o"
 check "openwebui open security" "grants open access to a backend" "$o"; stop
+start openwebui_onboarding; o=$(scan)
+check "openwebui onboarding access" "access: no admin account yet" "$o"
+check "openwebui onboarding security" "first visitor can claim admin" "$o"; stop
 start nextchat; o=$(scan)
 check "nextchat" "framework: NextChat" "$o"
 check "nextchat open access (needCode false)" "access: open" "$o"

@@ -90,7 +90,7 @@ Both are routinely deployed on dev ports bound to `0.0.0.0` with no authenticati
 ### 3.3 Shared / test
 - `test/mock_mcp_server.py`, `test/mock_llm_server.py` - dependency-free mocks
   (one config/framework per process via env var).
-- `test/run_matrix.sh` (MCP, 23 checks) and `test/run_llm_matrix.sh` (inference, 55 checks) -
+- `test/run_matrix.sh` (MCP, 23 checks) and `test/run_llm_matrix.sh` (inference, 57 checks) -
   local regression matrices asserting expected output.
 
 ## 4. On the wire
@@ -126,5 +126,5 @@ Both are routinely deployed on dev ports bound to `0.0.0.0` with no authenticati
 | Item | State |
 |---|---|
 | MCP: `mcp-info`, `mcp-enum`, `mcp.lua`, mock, matrix | Done; field-tested vs FastMCP, server-everything, and live public servers |
-| Inference: `llm-info`, `llm.lua`, `mock_llm_server.py`, `run_llm_matrix.sh` | Done; order-independent + credentialed; active "hello" probe (on by default), Anthropic detection, model enumeration, error-condition fingerprinting, Prometheus `/metrics` leak, and AI web UI / gateway detection with access posture; field-tested vs real Ollama and KoboldCpp; 55-check regression matrix passes |
+| Inference: `llm-info`, `llm.lua`, `mock_llm_server.py`, `run_llm_matrix.sh` | Done; order-independent + credentialed; active "hello" probe (on by default), Anthropic detection, model enumeration, error-condition fingerprinting, Prometheus `/metrics` leak, and AI web UI / gateway detection with access posture; field-tested vs real Ollama and KoboldCpp; 57-check regression matrix passes |
 | Upstream nmap PR + standalone repo | Repo public (`insidetrust/nmap-ai-recon`); MCP PR branch staged; submission on hold |

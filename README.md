@@ -83,6 +83,12 @@ LLM inference (`llm-info`): field-tested against real servers, not just the mock
   fix scores the unambiguous `/api/extra/version` banner above all emulated signals, so the
   server is now reported as KoboldCpp with its real version (not the emulated Ollama `0.7.0`).
   The matrix reproduces the multi-emulation collision to guard against regression.
+- **Open WebUI 0.9.6** (Docker, both auth configurations) - the access posture is read from
+  the real `/api/config`: `WEBUI_AUTH=false` reports `open`, the default reports the
+  freshly-deployed `onboarding` state. Field-testing added that `onboarding` case: a default
+  Open WebUI has no admin account yet, so the first visitor to an exposed instance can claim
+  admin and use the backend - a more severe finding than self-registration, now reported as
+  such.
 
 ## Usage
 
@@ -213,7 +219,7 @@ assert the expected output. `run_matrix.sh` covers MCP (protocol versions, all t
 transports, both auth states; 23 checks); `run_llm_matrix.sh` covers the inference
 detector (every framework, order-independent identification, the hello probe, credentials,
 model listing + enumeration, the Prometheus `/metrics` leak, and error-condition
-fingerprinting; 55 checks):
+fingerprinting; 57 checks):
 
 ```bash
 test/run_matrix.sh        # MCP;       exits non-zero on any failure

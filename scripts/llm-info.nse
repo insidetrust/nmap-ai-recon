@@ -93,6 +93,7 @@ action = function(host, port)
     -- is the relevant state, not a key/token challenge.
     local A = {
       open = "open (no authentication required)",
+      onboarding = "no admin account yet (first visitor can claim admin)",
       ["self-registration"] = "self-registration enabled (anyone can sign up)",
       login = "login required",
       unknown = "unknown (not exposed in config)",
@@ -126,6 +127,10 @@ action = function(host, port)
       out.SECURITY = string.format(
         "unauthenticated LLM web UI (%s) grants open access to a backend inference server%s",
         r.framework, r.gateway and "; prediction endpoints may be publicly callable" or "")
+    elseif r.access == "onboarding" then
+      out.SECURITY = string.format(
+        "unconfigured LLM web UI (%s) has no admin account yet; the first visitor can claim admin and use the backend inference server",
+        r.framework)
     elseif r.access == "self-registration" then
       out.SECURITY = string.format(
         "LLM web UI (%s) allows self-registration for unauthenticated access to a backend inference server",

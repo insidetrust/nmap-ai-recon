@@ -292,11 +292,16 @@ local function detect_webui(host, port, opts)
     if doc and doc.name == "Open WebUI" then
       -- features.auth=false means WEBUI_AUTH is disabled (fully open); enable_signup=true
       -- means open self-registration.
+      -- features.auth=false means WEBUI_AUTH is disabled (fully open); onboarding=true means
+      -- no admin account exists yet, so the first visitor can claim admin; enable_signup=true
+      -- means open self-registration.
       local f = type(doc.features) == "table" and doc.features or {}
       local r = { framework = "Open WebUI", endpoint = "/api/config", ui = true,
                   version = doc.version, models = {}, confidence = 90 }
       if f.auth == false then
         r.access = "open"; r.auth_required = false
+      elseif doc.onboarding == true then
+        r.access = "onboarding"; r.auth_required = false
       elseif f.enable_signup == true then
         r.access = "self-registration"; r.auth_required = false
       else
