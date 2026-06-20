@@ -6,8 +6,7 @@ surface of Model Context Protocol (MCP) servers** during authorised security ass
 Neither **nmap** nor **Metasploit** can scan MCP *services* on the network (their "MCP"
 projects wrap those tools *as* MCP servers for an LLM - the inverse). **Tenable Web App
 Scanning** does cover it commercially (plugins 114790/114791/114965). These scripts are the
-open, free, CLI-native equivalent. See [`PRD.md`](PRD.md) for the spec/roadmap and
-[`WRITEUP.md`](WRITEUP.md) for the research write-up.
+open, free, CLI-native equivalent.
 
 ## Scripts
 

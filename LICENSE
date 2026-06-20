@@ -20,8 +20,7 @@ Each NSE file carries the standard header line:
 
 Supporting material
 -------------------
-The remaining files (test harnesses under test/, and the Markdown documentation -
-README.md, PRD.md, WRITEUP.md, SUBMISSION.md, CHANGELOG.md) are released under the
+The remaining files (test harnesses under test/, and README.md) are released under the
 MIT License:
 
   Copyright (c) 2026 Ben Williams / NCC Group

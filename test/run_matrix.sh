@@ -12,7 +12,8 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PORT=8765
 TOKEN=mock-test-token-abc123
-DD="$(mktemp -d)/datadir"
+TMPROOT="$(mktemp -d)"
+DD="$TMPROOT/datadir"
 
 mkdir -p "$DD/scripts" "$DD/nselib"
 cp "$ROOT"/scripts/mcp-info.nse "$ROOT"/scripts/mcp-enum.nse "$DD/scripts/"
@@ -28,7 +29,7 @@ start_mock() {  # $1 = protocol version to advertise
   sleep 1.2
 }
 stop_mock() { [ -n "$MOCKPID" ] && kill "$MOCKPID" 2>/dev/null; wait "$MOCKPID" 2>/dev/null; MOCKPID=""; }
-trap stop_mock EXIT
+trap 'stop_mock; rm -rf "$TMPROOT"' EXIT
 
 scan() {  # remaining args -> nmap script-args; echoes script output
   nmap --datadir "$DD" -sT -Pn -p "$PORT" --script "$1" --script-args "$2" 127.0.0.1 2>/dev/null
