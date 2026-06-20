@@ -22,9 +22,15 @@ OPENAI_MODELS = {"object": "list", "data": [
 ROUTES = {
     "ollama": {
         "/api/tags": {"models": [
-            {"name": "llama3:8b", "model": "llama3:8b", "details": {"parameter_size": "8B"}},
-            {"name": "qwen2.5:7b", "model": "qwen2.5:7b"},
-            {"name": "nomic-embed-text:latest", "model": "nomic-embed-text:latest"},
+            {"name": "llama3:8b", "model": "llama3:8b", "modified_at": "2024-01-01T00:00:00Z",
+             "size": 4661224676, "digest": "sha256:" + "a" * 64,
+             "details": {"family": "llama", "parameter_size": "8B", "quantization_level": "Q4_0"}},
+            {"name": "qwen2.5:7b", "model": "qwen2.5:7b", "modified_at": "2024-01-01T00:00:00Z",
+             "size": 4431390720, "digest": "sha256:" + "b" * 64,
+             "details": {"parameter_size": "7.6B", "quantization_level": "Q4_K_M"}},
+            {"name": "nomic-embed-text:latest", "model": "nomic-embed-text:latest",
+             "modified_at": "2024-01-01T00:00:00Z", "size": 274302450, "digest": "sha256:" + "c" * 64,
+             "details": {"parameter_size": "137M", "quantization_level": "F16"}},
         ]},
         "/api/version": {"version": "0.3.14"},
         # real Ollama ALSO exposes an OpenAI-compatible shim; identification must still
@@ -56,6 +62,9 @@ VALID_TOKEN = "Bearer test-llm-key-abc123"
 
 
 class Handler(BaseHTTPRequestHandler):
+    server_version = "uvicorn"   # most real inference servers (vLLM, FastAPI) front with this
+    sys_version = ""
+
     def log_message(self, *a):
         pass
 

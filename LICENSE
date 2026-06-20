@@ -15,6 +15,8 @@ Source License (NPSL), https://nmap.org/npsl/:
     scripts/llm-info.nse
     scripts/llm.lua
     nmap-service-probes.mcp
+    nmap-service-probes.llm
+    nmap-services.llm
 
 Each NSE file carries the standard in-file header:
     license = "Same as Nmap--See https://nmap.org/book/man-legal.html"

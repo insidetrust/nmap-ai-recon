@@ -1,0 +1,10 @@
+# nmap-services fragment: register the Ollama inference API port (11434/tcp), which is
+# currently unregistered (nmap reports it as "unknown"). This makes the SERVICE column
+# show "ollama" on 11434 even without -sV.
+#
+# Install: append to nmap's nmap-services data file, e.g.
+#     cat nmap-services.llm | sudo tee -a /usr/share/nmap/nmap-services
+#
+# The frequency value is a placeholder; the Nmap project derives the real open-frequency
+# from its internet-wide scan dataset.
+ollama	11434/tcp	0.000000	# Ollama LLM inference API

@@ -1,0 +1,42 @@
+# nmap-service-probes fragment for LLM inference APIs.
+#
+# These probes let `nmap -sV` identify the common inference frameworks WITHOUT --script,
+# by requesting read-only model-list / metadata endpoints and matching the response:
+#   * Ollama:            GET /api/tags
+#   * OpenAI-compatible: GET /v1/models  (vLLM, LiteLLM, LocalAI, LM Studio, and similar)
+#
+# These are read-only metadata requests; no inference is run. For active confirmation,
+# Anthropic detection, model enumeration, and risk flagging, use the llm-info NSE script.
+#
+# Install: append these lines to nmap's nmap-service-probes data file, e.g.
+#     cat nmap-service-probes.llm | sudo tee -a /usr/share/nmap/nmap-service-probes
+# or run nmap with a custom data dir containing a full nmap-service-probes that includes
+# these lines:  nmap --datadir /path/to/dir -sV <target>
+#
+# Notes:
+#  * Append these *after* the existing "Probe" entries; each match/softmatch line must
+#    immediately follow its Probe directive.
+#  * rarity 7 runs at the default -sV intensity; use --version-all to force on other ports.
+#  * If nmap hard-matches a generic HTTP server first (a Server banner it already knows), it
+#    can stop before these probes; for those ports run `--script llm-info` for authoritative
+#    detection. Real inference servers (uvicorn-fronted) softmatch and are refined here.
+
+##############################################################################
+# Ollama: GET /api/tags lists installed models (name + digest + details)
+##############################################################################
+Probe TCP OllamaTags q|GET /api/tags HTTP/1.1\r\nHost: nmap\r\nUser-Agent: nmap-llm\r\nAccept: application/json\r\nConnection: close\r\n\r\n|
+rarity 7
+ports 11434
+
+match ollama m|"models"\s*:\s*\[.*"digest"\s*:\s*"[^"]+".*"parameter_size"|s p/Ollama/ i/LLM inference API/ cpe:/a:ollama:ollama/
+softmatch ollama m|"models"\s*:\s*\[.*"modified_at"|s p/Ollama/ i/LLM inference API/
+
+##############################################################################
+# OpenAI-compatible API: GET /v1/models returns an object:list of object:model
+##############################################################################
+Probe TCP OpenAIModels q|GET /v1/models HTTP/1.1\r\nHost: nmap\r\nUser-Agent: nmap-llm\r\nAccept: application/json\r\nConnection: close\r\n\r\n|
+rarity 7
+ports 1234,4000,5000,8000,8001,8080,8888,9000
+
+match llm m|"object"\s*:\s*"list".*"object"\s*:\s*"model"|s p/OpenAI-compatible LLM API/ i/inference API/
+softmatch llm m|"object"\s*:\s*"list".*"data"\s*:\s*\[|s p/OpenAI-compatible LLM API/ i/inference API (probable)/

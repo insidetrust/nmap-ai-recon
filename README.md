@@ -71,6 +71,13 @@ Real servers forced hardening, all automatic: a **raw-socket transport** (nmap's
 **TLS auto-fallback**, a **port-qualified Host header** (servers return `421` otherwise),
 and valid `initialize` params (strict servers reject empty params with `-32602`).
 
+LLM inference (`llm-info`): field-tested against a real **Ollama 0.30.7** instance -
+detection, version, and the full model inventory, read-only in ~0.1s. Field-testing drove
+the conditional hello probe (skip the redundant inference request when a framework already
+lists its models, which on Ollama forces a slow model load). The bundled
+`nmap-service-probes.llm` fragment also lets bare `-sV` flag the instance as
+`ollama  Ollama (LLM inference API)` without the script.
+
 ## Usage
 
 ```bash
