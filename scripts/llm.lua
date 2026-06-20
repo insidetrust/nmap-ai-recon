@@ -4,11 +4,9 @@
 -- Detects the common self-hosted and cloud inference frameworks by their read-only
 -- model-list and metadata endpoints: the OpenAI-compatible API (vLLM, SGLang, LiteLLM,
 -- LocalAI, LM Studio, text-generation-webui, and similar), Ollama, HuggingFace TGI and TEI,
--- llama.cpp server, KoboldCpp, Triton/KServe (v2), and TorchServe. It also flags the common
--- LLM web UIs / gateways that front a backend (Open WebUI, LibreChat, AnythingLLM). Reports
--- the framework, version, model inventory, authentication posture (including a web UI's
--- self-registration state), and notable information leaks (including model names exposed via
--- a Prometheus /metrics endpoint).
+-- llama.cpp server, KoboldCpp, Triton/KServe (v2), and TorchServe. Reports the framework,
+-- version, model inventory, authentication posture, and notable information leaks (including
+-- model names exposed via a Prometheus /metrics endpoint).
 --
 -- By default the library also sends a single minimal "hello" completion (max_tokens = 1)
 -- to confirm an endpoint serves inference and to detect formats with no model-list endpoint
@@ -31,11 +29,10 @@ _ENV = stdnse.module("llm", stdnse.seeall)
 -- Neutral default User-Agent (a UA containing "nmap" is blocked by common WAFs).
 DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
--- Ports commonly hosting inference APIs / UIs (in addition to HTTP-fingerprinted ports).
+-- Ports commonly hosting inference APIs (in addition to HTTP-fingerprinted ports).
 -- 11434 Ollama, 8000 vLLM/TGI/Triton, 30000 SGLang, 1234 LM Studio, 4000 LiteLLM,
--- 5001 KoboldCpp, 8081 TorchServe mgmt, 7860/5000 gradio web-UIs, 8080/3000 Open WebUI,
--- 3080 LibreChat, 3001 AnythingLLM.
-PORTS = { 11434, 8000, 8080, 8081, 1234, 4000, 5000, 5001, 7860, 3000, 3001, 3080, 8888, 9000, 30000 }
+-- 5001 KoboldCpp, 8081 TorchServe mgmt, 7860/5000 gradio web-UIs.
+PORTS = { 11434, 8000, 8080, 8081, 1234, 4000, 5000, 5001, 7860, 3000, 8888, 9000, 30000 }
 local PORTS_SET = {}
 for _, p in ipairs(PORTS) do PORTS_SET[p] = true end
 
@@ -273,45 +270,9 @@ local function detect_torchserve(host, port, opts)
   return nil
 end
 
--- LLM web UIs / gateways. These are front-ends that proxy to a backend inference server
--- rather than serving inference themselves; an exposed instance often allows unauthenticated
--- use or self-registration against a real backend model, so the registration state is a
--- useful finding. Reported distinctly (ui = true) and never sent an active inference probe.
-local function detect_webui(host, port, opts)
-  -- Open WebUI: GET /api/config -> {"name":"Open WebUI","version":...,"features":{...}}.
-  -- LibreChat: GET /api/config -> {"appTitle":...,"registrationEnabled":...,"socialLogins":...}.
-  local st, body = get(host, port, "/api/config", opts)
-  if st == 200 then
-    local doc = jparse(body)
-    if doc and doc.name == "Open WebUI" then
-      local r = { framework = "Open WebUI", endpoint = "/api/config",
-                  ui = true, version = doc.version, models = {}, auth_required = false, confidence = 90 }
-      if type(doc.features) == "table" and doc.features.enable_signup == true then r.signup = true end
-      return r
-    end
-    if doc and (doc.appTitle or doc.registrationEnabled ~= nil or doc.emailLoginEnabled ~= nil
-        or doc.socialLogins) then
-      local r = { framework = "LibreChat", endpoint = "/api/config",
-                  ui = true, models = {}, auth_required = false, confidence = 88 }
-      if doc.registrationEnabled == true then r.signup = true end
-      return r
-    end
-  end
-  -- AnythingLLM: GET /api/ping -> {"online":true}; the served SPA confirms it.
-  local ps = get(host, port, "/api/ping", opts)
-  if ps == 200 then
-    local _, hb = get(host, port, "/", opts)
-    if hb and hb:find("AnythingLLM", 1, true) then
-      return { framework = "AnythingLLM", endpoint = "/api/ping",
-               ui = true, models = {}, auth_required = false, confidence = 80 }
-    end
-  end
-  return nil
-end
-
 local DETECTORS = {
   detect_ollama, detect_openai, detect_tgi, detect_llamacpp, detect_koboldcpp,
-  detect_triton, detect_torchserve, detect_webui,
+  detect_triton, detect_torchserve,
 }
 
 --------------------------------------------------------------------------------
@@ -481,8 +442,7 @@ function detect(host, port, opts)
 
   -- Active "hello" probe (on by default): confirm inference on an identified endpoint, or
   -- actively detect a list-less API (Anthropic) / otherwise-unidentified inference endpoint.
-  -- Never probe a web UI / gateway: it is a front-end, not an inference endpoint.
-  if opts.probe and not (result and result.ui) then
+  if opts.probe then
     if result and not result.auth_required then
       -- Confirm inference with a hello only when it adds information. Skip it for a framework
       -- that already lists its models: the list already proves a live inference endpoint, and
