@@ -12,6 +12,8 @@ Source License (NPSL), https://nmap.org/npsl/:
     scripts/mcp-info.nse
     scripts/mcp-enum.nse
     scripts/mcp.lua
+    scripts/llm-info.nse
+    scripts/llm.lua
     nmap-service-probes.mcp
 
 Each NSE file carries the standard in-file header:

@@ -1,23 +1,37 @@
-# nmap-mcp - NSE scripts for enumerating MCP servers
+# nmap-ai-recon - NSE scripts for AI infrastructure recon
 
 Nmap Scripting Engine (NSE) plugins to **discover, fingerprint, and enumerate the attack
-surface of Model Context Protocol (MCP) servers** during authorised security assessments.
+surface of AI infrastructure** during authorised security assessments - both **Model
+Context Protocol (MCP) servers** and **LLM inference APIs**.
 
-Neither **nmap** nor **Metasploit** can scan MCP *services* on the network (their "MCP"
-projects wrap those tools *as* MCP servers for an LLM - the inverse). **Tenable Web App
-Scanning** does cover it commercially (plugins 114790/114791/114965). These scripts are the
-open, free, CLI-native equivalent.
+nmap and Metasploit can scan neither (the "nmap/Metasploit + MCP" projects are the inverse -
+they wrap the tool *as* an MCP server). **Tenable Web App Scanning** covers MCP commercially
+(plugins 114790/114791/114965). These scripts are the open, free, CLI-native equivalent for
+both classes.
 
 ## Scripts
 
+### MCP servers
 | File | Category | What it does |
 |--------|----------|--------------|
 | `scripts/mcp-info.nse` | `discovery, safe, version` | Detects MCP over HTTP(S) via the JSON-RPC `initialize` handshake (Streamable HTTP) with a legacy HTTP+SSE fallback and OAuth metadata parsing. Reports transport, endpoint, server name/version, protocol version, capabilities, session statefulness, and auth posture. Feeds `-sV`. |
 | `scripts/mcp-enum.nse` | `discovery, safe` | Completes the handshake then calls `tools/list`, `resources/list`, `resources/templates/list`, `prompts/list`. Lists tools/params, resources, prompts; **risk-assesses each tool across its name, description, and JSON input schema** (categorised: code-exec / file-access / network-ssrf / sql-db / secrets / privileged), and flags **unauthenticated exposure**. |
-| `scripts/mcp.lua` | nselib | Shared library: both transports (raw-socket), the handshake, OAuth discovery, and enumeration. Must be installed into nmap's `nselib/`. |
+| `scripts/mcp.lua` | nselib | Shared library: both transports (raw-socket), the handshake, OAuth discovery, and enumeration. |
 
-Both scripts are **read-only**: they issue only the protocol handshake and `*/list`
-methods. They never call `tools/call`, so no server-side tool is ever executed.
+The MCP scripts are **read-only**: only the handshake and `*/list` methods, never
+`tools/call`, so no server-side tool is ever executed.
+
+### LLM inference APIs
+| File | Category | What it does |
+|--------|----------|--------------|
+| `scripts/llm-info.nse` | `discovery, safe, version` | Detects OpenAI-compatible (vLLM, LiteLLM, LocalAI, LM Studio, text-generation-webui), Ollama, HF TGI, llama.cpp, Triton/KServe (v2), and TorchServe via read-only model-list/metadata endpoints. Reports framework, version (native endpoint + `Server` header), auth state, model inventory, and leaks (e.g. a llama.cpp system prompt). Identification is **order-independent** (specificity-scored). Feeds `-sV`. |
+| `scripts/llm.lua` | nselib | Shared detection library for the inference frameworks. |
+
+`llm-info` is **read-only and safe**: it requests only model-list/metadata/health endpoints
+and never sends an inference request, so no model is run. Credentials (`llm.token` bearer,
+or `llm.header` for an API key / session cookie) let it test authenticated APIs. An opt-in
+intrusive `llm-probe` (active inference probing, model enumeration, and Anthropic-format
+detection) is planned.
 
 ### Field-tested against real servers
 Local frameworks:
@@ -48,15 +62,22 @@ nmap -sV --script "./scripts/mcp-info.nse,./scripts/mcp-enum.nse" -p- <target>
 # Custom endpoint paths / dump full tool input schemas
 nmap --script ./scripts/mcp-enum.nse \
      --script-args mcp.paths=/mcp,/api/mcp,mcp-enum.schemas=true <target>
+
+# Detect LLM inference APIs (Ollama 11434, vLLM/TGI 8000, LM Studio 1234, ...)
+nmap -sV -p 11434,8000,1234,4000 --script ./scripts/llm-info.nse <target>
+
+# Test an authenticated inference API with a bearer token or API key
+nmap --script ./scripts/llm-info.nse --script-args llm.token=sk-... <target>
+nmap --script ./scripts/llm-info.nse --script-args 'llm.header=x-api-key: sk-...' <target>
 ```
 
 ### Install
 
-The scripts `require` the `mcp` nselib, so install both the `.nse` scripts and `mcp.lua`:
+The scripts `require` their nselib, so install both the `.nse` scripts and the `.lua` libs:
 
 ```bash
-sudo cp scripts/mcp-*.nse /usr/share/nmap/scripts/
-sudo cp scripts/mcp.lua   /usr/share/nmap/nselib/
+sudo cp scripts/*.nse /usr/share/nmap/scripts/
+sudo cp scripts/mcp.lua scripts/llm.lua /usr/share/nmap/nselib/
 sudo nmap --script-updatedb
 # now usable by name:  nmap --script mcp-info,mcp-enum <target>
 ```
