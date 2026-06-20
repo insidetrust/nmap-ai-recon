@@ -271,7 +271,7 @@ function is_dangerous(name, desc)
   return assess_tool({ name = name, description = desc }).dangerous
 end
 
--- JSON-RPC params per method. `initialize` MUST carry protocolVersion + clientInfo;
+-- JSON-RPC params per method. `initialize` must carry protocolVersion + clientInfo;
 -- strict servers (e.g. FastMCP) reject an empty params object with -32602.
 local function rpc_params(method)
   if method == "initialize" then

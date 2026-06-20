@@ -4,12 +4,13 @@
 -- Detects the common self-hosted and cloud inference frameworks by their read-only
 -- model-list and metadata endpoints: the OpenAI-compatible API (vLLM, SGLang, LiteLLM,
 -- LocalAI, LM Studio, text-generation-webui, and similar), Ollama, HuggingFace TGI and TEI,
--- llama.cpp server, KoboldCpp, Triton/KServe (v2), and TorchServe. It also flags the common
--- AI web UIs / gateways that front a backend (Open WebUI, LibreChat, NextChat, LobeChat,
--- Flowise, AnythingLLM), reporting each UI's access posture (open / self-registration / login)
--- since that determines whether the backend model can be reached without credentials. Reports
--- the framework, version, model inventory, authentication posture, and notable information
--- leaks (including model names exposed via a Prometheus /metrics endpoint).
+-- llama.cpp server, KoboldCpp, Triton/KServe (v2), and TorchServe. It also flags the
+-- common AI web UIs / gateways that front a backend (Open WebUI, LibreChat, NextChat,
+-- LobeChat, Flowise, AnythingLLM), reporting each UI's access posture (open /
+-- self-registration / login) since that determines whether the backend model can be
+-- reached without credentials. Reports the framework, version, model inventory,
+-- authentication posture, and notable information leaks (including model names exposed
+-- via a Prometheus /metrics endpoint).
 --
 -- By default the library also sends a single minimal "hello" completion (max_tokens = 1)
 -- to confirm an endpoint serves inference and to detect formats with no model-list endpoint
