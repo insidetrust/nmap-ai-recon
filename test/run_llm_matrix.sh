@@ -63,6 +63,17 @@ echo "== Prometheus /metrics model-name leak =="
 start vllm; o=$(scan); check "vllm /metrics leak" "model name disclosed via /metrics" "$o"; stop
 start sglang; o=$(scan); check "sglang /metrics leak" "model name disclosed via /metrics" "$o"; stop
 
+echo "== LLM web UIs / gateways (reported distinctly, no active probe) =="
+start openwebui; o=$(scan)
+check "open webui" "framework: Open WebUI" "$o"
+check "openwebui self-registration" "self_registration: enabled" "$o"
+check "openwebui ui security wording" "web UI .*fronting a backend" "$o"
+absent "ui gets no inference hello" "inference: confirmed" "$o"; stop
+start librechat; o=$(scan)
+check "librechat" "framework: LibreChat" "$o"
+check "librechat self-registration" "self_registration: enabled" "$o"; stop
+start anythingllm; o=$(scan); check "anythingllm" "framework: AnythingLLM" "$o"; stop
+
 echo "== Active hello probe (on by default) =="
 start openai; o=$(scan); check "inference confirmed" "inference: confirmed" "$o"; stop
 start openai; o=$(scan "llm.probe=false"); absent "probe=false is read-only" "inference:" "$o"; stop

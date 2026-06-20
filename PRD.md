@@ -77,14 +77,18 @@ Both are routinely deployed on dev ports bound to `0.0.0.0` with no authenticati
   IDs (`200` vs `404 model-not-found`). It also fingerprints the stack from error-response
   shapes (`{object:error}` vLLM, `{detail}` FastAPI/Starlette, `{error: model_not_found}`
   canonical OpenAI), which refines a generic OpenAI match. Credentials via `llm.token`
-  (Bearer) / `llm.header` (e.g. `x-api-key`, session cookie) test authenticated APIs.
+  (Bearer) / `llm.header` (e.g. `x-api-key`, session cookie) test authenticated APIs. It also
+  flags the common **LLM web UIs / gateways** that front a backend (Open WebUI, LibreChat,
+  AnythingLLM) - reported distinctly as a UI (never sent an active inference probe) with the
+  **self-registration** state, since an exposed UI often allows unauthenticated or
+  self-signup use of a real backend model.
 - **`llm.lua`** - shared detection + probe library (detectors, auth, active hello probe,
   model enumeration).
 
 ### 3.3 Shared / test
 - `test/mock_mcp_server.py`, `test/mock_llm_server.py` - dependency-free mocks
   (one config/framework per process via env var).
-- `test/run_matrix.sh` (MCP, 23 checks) and `test/run_llm_matrix.sh` (inference, 38 checks) -
+- `test/run_matrix.sh` (MCP, 23 checks) and `test/run_llm_matrix.sh` (inference, 45 checks) -
   local regression matrices asserting expected output.
 
 ## 4. On the wire
@@ -116,5 +120,5 @@ Both are routinely deployed on dev ports bound to `0.0.0.0` with no authenticati
 | Item | State |
 |---|---|
 | MCP: `mcp-info`, `mcp-enum`, `mcp.lua`, mock, matrix | Done; field-tested vs FastMCP, server-everything, and live public servers |
-| Inference: `llm-info`, `llm.lua`, `mock_llm_server.py`, `run_llm_matrix.sh` | Done; order-independent + credentialed; active "hello" probe (on by default), Anthropic detection, model enumeration, and error-condition fingerprinting; 26-check regression matrix passes |
+| Inference: `llm-info`, `llm.lua`, `mock_llm_server.py`, `run_llm_matrix.sh` | Done; order-independent + credentialed; active "hello" probe (on by default), Anthropic detection, model enumeration, error-condition fingerprinting, Prometheus `/metrics` leak, and LLM web UI / gateway detection; field-tested vs real Ollama and KoboldCpp; 45-check regression matrix passes |
 | Upstream nmap PR + standalone repo | Repo public (`insidetrust/nmap-ai-recon`); MCP PR branch staged; submission on hold |
