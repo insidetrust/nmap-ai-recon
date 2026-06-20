@@ -1,6 +1,7 @@
 # PRD: Nmap NSE Plugins for Enumerating MCP Services
 
-**Status:** Draft v0.1
+**Status:** Implemented (detection, enumeration, and OAuth discovery shipped; upstream
+submission pending)
 **Author:** Ben Williams (NCC Group)
 **Date:** 2026-06-08
 
@@ -31,7 +32,7 @@ Engagements that review AI systems therefore have no standard, scriptable, free 
 1. Discover MCP endpoints across an IP range / port range.
 2. Fingerprint the server (implementation name, version, protocol version).
 3. Enumerate the exposed attack surface (tools, resources, prompts).
-4. Flag the security-relevant conditions (no auth, dangerous tools, stale protocol).
+4. Flag the security-relevant conditions (no authentication, dangerous tools).
 
 ## 2. Goals
 
@@ -40,12 +41,12 @@ Engagements that review AI systems therefore have no standard, scriptable, free 
 | G1 | Detect MCP servers over HTTP(S) | Identifies Streamable-HTTP and legacy HTTP+SSE endpoints; integrates with `-sV` |
 | G2 | Fingerprint the server | Reports `serverInfo.name`, `serverInfo.version`, `protocolVersion`, capabilities |
 | G3 | Enumerate attack surface | Lists tool names + descriptions, resource URIs, prompt names |
-| G4 | Flag security conditions | Marks unauthenticated access, dangerous tool names, deprecated protocol versions |
+| G4 | Flag security conditions | Marks unauthenticated access and dangerous tool names/parameters |
 | G5 | Be a good NSE citizen | Correct categories, safe by default, configurable, low false-positive rate |
 
 ### Non-goals
-- Exploiting tools (no `tools/call` invocation by default - that executes attacker-chosen
-  side effects). An opt-in, clearly-flagged probe may be considered later.
+- Exploiting tools: the scripts never call `tools/call` (that would execute attacker-chosen
+  side effects), with or without a supplied token.
 - stdio-transport servers (local subprocess only; not network-reachable, out of scope).
 - Authentication brute force / OAuth token theft.
 
@@ -80,11 +81,9 @@ MCP uses **JSON-RPC 2.0**. Two network transports exist:
   `event: endpoint` whose `data:` is the POST URL (e.g. `/messages?sessionId=...`) used for
   subsequent JSON-RPC.
 
-### 3.3 Discovery & auth signals
-- `.well-known/mcp.json` - optional discovery document (not probed; detection keys on the
-  `initialize` handshake).
+### 3.3 Auth signals
 - OAuth 2.1 protected resources advertise `WWW-Authenticate: Bearer resource_metadata=...`
-  and host `.well-known/oauth-protected-resource`.
+  and host `.well-known/oauth-protected-resource` (RFC 9728).
 
 ## 4. Deliverables
 
@@ -106,12 +105,15 @@ JSON input schema**, bucketing findings into categories (code-exec, file-access,
 network/ssrf, sql/db, secrets, privileged), and flags **unauthenticated exposure** as a
 security finding.
 
-### 4.3 `mcp.lua` (nselib helper, optional/refactor)
-Shared handshake + SSE-parsing + JSON-extraction helpers once both scripts stabilise.
+### 4.3 `mcp.lua` - shared nselib
+The library both scripts build on: the two transports (raw sockets), the `initialize`
+handshake, SSE/JSON response parsing, OAuth metadata discovery, and the tool risk-assessment
+helpers. Installs into nmap's `nselib/`.
 
 ### 4.4 `test/mock_mcp_server.py`
 A dependency-free mock MCP server (Streamable HTTP + legacy SSE modes) used to validate the
-scripts in CI / locally without a real target.
+scripts locally without a real target. `test/run_matrix.sh` drives it across protocol
+versions, transports, and auth states.
 
 ## 5. Detection algorithm (per candidate path)
 
@@ -175,7 +177,7 @@ auto-detected, so there is no force-https flag.
 - **Safe category:** scripts only call read-only/idempotent MCP methods (`initialize`,
   `*/list`). They never call `tools/call`. `initialize` is the protocol's own handshake and
   is the minimum needed to identify the service.
-- Honour `--max-rate`, timeouts, and `host.targetname` (for SNI/Host).
+- Honour the configured timeouts; use `host.targetname` for the Host/SNI header.
 - The `notifications/initialized` notification is sent only where required to unlock
   `*/list` on strict servers; it has no side effects.
 - Authorised-testing only; this is standard recon tooling. Findings (unauth + dangerous
@@ -200,10 +202,6 @@ auto-detected, so there is no force-https flag.
    SSE), **TLS auto-fallback**, **Host header with port** (servers return `421` for
    DNS-rebinding protection otherwise), and **correct `initialize` params** (strict servers
    reject empty params with `-32602`).
-4. **M4:** submit to nmap NSE repo + write up.
-
-## 10. Open questions
-- Default port set vs. `-sV`-driven only? (Lean: match http/https + a small common-dev-port
-  list, gated behind a script-arg to avoid scanning noise.)
-- Should an opt-in `--script-args mcp.unsafe=true` ever call a benign `tools/call`? (Deferred
-  - high blast radius, out of M1-M3.)
+4. **M4:** upstream submission package (conformance pass, author/format alignment, live
+   field-testing against public servers). **DONE.** Opening the nmap PR + dev-list
+   notification is the remaining step.
