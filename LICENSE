@@ -11,9 +11,9 @@ Source License (NPSL), https://nmap.org/npsl/:
 
     scripts/mcp-info.nse
     scripts/mcp-enum.nse
-    scripts/mcp.lua
+    nselib/mcp.lua
     scripts/llm-info.nse
-    scripts/llm.lua
+    nselib/llm.lua
     nmap-service-probes.mcp
     nmap-service-probes.llm
     nmap-services.llm

@@ -16,7 +16,7 @@ both classes.
 |--------|----------|--------------|
 | `scripts/mcp-info.nse` | `discovery, safe, version` | Detects MCP over HTTP(S) via the JSON-RPC `initialize` handshake (Streamable HTTP) with a legacy HTTP+SSE fallback and OAuth metadata parsing. Reports transport, endpoint, server name/version, protocol version, capabilities, session statefulness, and auth posture. Feeds `-sV`. |
 | `scripts/mcp-enum.nse` | `discovery, safe` | Completes the handshake then calls `tools/list`, `resources/list`, `resources/templates/list`, `prompts/list`. Lists tools/params, resources, prompts; **risk-assesses each tool across its name, description, and JSON input schema** (categorised: code-exec / file-access / network-ssrf / sql-db / secrets / privileged), and flags **unauthenticated exposure**. |
-| `scripts/mcp.lua` | nselib | Shared library: both transports (raw-socket), the handshake, OAuth discovery, and enumeration. |
+| `nselib/mcp.lua` | nselib | Shared library: both transports (raw-socket), the handshake, OAuth discovery, and enumeration. |
 
 The MCP scripts are **read-only**: only the handshake and `*/list` methods, never
 `tools/call`, so no server-side tool is ever executed.
@@ -25,7 +25,7 @@ The MCP scripts are **read-only**: only the handshake and `*/list` methods, neve
 | File | Category | What it does |
 |--------|----------|--------------|
 | `scripts/llm-info.nse` | `discovery, safe` | Detects OpenAI-compatible (vLLM, SGLang, LiteLLM, LocalAI, LM Studio, text-generation-webui), Ollama, HF TGI and TEI, llama.cpp, KoboldCpp, Triton/KServe (v2), TorchServe, and **Anthropic** via read-only endpoints plus a minimal "hello" probe, and flags the common **AI web UIs / gateways** that front a backend (Open WebUI, LibreChat, NextChat, LobeChat, Flowise, AnythingLLM), reporting each UI's **access posture** (open / self-registration / login) so an instance that grants **unauthenticated use of the backend model** stands out. Reports framework, version (native endpoint + `Server` header), auth state, model inventory (listed or **enumerated by probing known IDs**), and leaks (e.g. a llama.cpp system prompt, or a model name exposed via a Prometheus `/metrics` endpoint). **Order-independent** identification. Feeds `-sV`. |
-| `scripts/llm.lua` | nselib | Shared detection library for the inference frameworks. |
+| `nselib/llm.lua` | nselib | Shared detection library for the inference frameworks. |
 
 `llm-info` keys detection on read-only model-list/metadata endpoints, and by default also
 sends a single minimal "hello" completion (`max_tokens=1`) to confirm the endpoint serves
@@ -117,7 +117,7 @@ The scripts `require` their nselib, so install both the `.nse` scripts and the `
 
 ```bash
 sudo cp scripts/*.nse /usr/share/nmap/scripts/
-sudo cp scripts/mcp.lua scripts/llm.lua /usr/share/nmap/nselib/
+sudo cp nselib/*.lua /usr/share/nmap/nselib/
 sudo nmap --script-updatedb
 # now usable by name:  nmap --script mcp-info,mcp-enum <target>
 ```
@@ -126,7 +126,7 @@ To run from the repo **without installing** (as in the examples here), point nma
 data dir that contains the lib:
 
 ```bash
-mkdir -p /tmp/mcp-datadir/nselib && cp scripts/mcp.lua /tmp/mcp-datadir/nselib/
+mkdir -p /tmp/mcp-datadir/nselib && cp nselib/mcp.lua /tmp/mcp-datadir/nselib/
 nmap --datadir /tmp/mcp-datadir --script ./scripts/mcp-info.nse <target>
 ```
 

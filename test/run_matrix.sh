@@ -17,7 +17,7 @@ DD="$TMPROOT/datadir"
 
 mkdir -p "$DD/scripts" "$DD/nselib"
 cp "$ROOT"/scripts/mcp-info.nse "$ROOT"/scripts/mcp-enum.nse "$DD/scripts/"
-cp "$ROOT"/scripts/mcp.lua "$DD/nselib/"
+cp "$ROOT"/nselib/mcp.lua "$DD/nselib/"
 cp /usr/share/nmap/scripts/script.db "$DD/scripts/" 2>/dev/null
 nmap --datadir "$DD" --script-updatedb >/dev/null 2>&1
 
