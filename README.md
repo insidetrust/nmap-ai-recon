@@ -24,7 +24,7 @@ The MCP scripts are **read-only**: only the handshake and `*/list` methods, neve
 ### LLM inference APIs
 | File | Category | What it does |
 |--------|----------|--------------|
-| `scripts/llm-info.nse` | `discovery, safe` | Detects OpenAI-compatible (vLLM, SGLang, LiteLLM, LocalAI, LM Studio, text-generation-webui), Ollama, HF TGI and TEI, llama.cpp, KoboldCpp, Triton/KServe (v2), TorchServe, and **Anthropic** via read-only endpoints plus a minimal "hello" probe, and flags the common **AI web UIs / gateways** that front a backend (Open WebUI, LibreChat, NextChat, LobeChat, Flowise, AnythingLLM), reporting each UI's **access posture** (open / self-registration / login) so an instance that grants **unauthenticated use of the backend model** stands out. Reports framework, version (native endpoint + `Server` header), auth state, model inventory (listed or **enumerated by probing known IDs**), and leaks (e.g. a llama.cpp system prompt, or a model name exposed via a Prometheus `/metrics` endpoint). **Order-independent** identification. Feeds `-sV`. |
+| `scripts/llm-info.nse` | `discovery, safe` | Detects OpenAI-compatible (vLLM, SGLang, LiteLLM, LocalAI, Xinference, Jan, LM Studio, text-generation-webui), Ollama, HF TGI and TEI, llama.cpp, KoboldCpp, Triton/KServe (v2), TorchServe (management **and** inference API), BentoML, and **Anthropic** via read-only endpoints plus a minimal "hello" probe. It also covers **image-generation / ML-app servers** (ComfyUI, Stable Diffusion WebUI / AUTOMATIC1111, Gradio, Ray dashboard), **vector databases** (ChromaDB, Qdrant, Weaviate, Milvus, Marqo), the common **AI web UIs / gateways** that front a backend (Open WebUI, LibreChat, NextChat, LobeChat, LoLLMs, Flowise, Langflow, AnythingLLM), and **OpenAI plugin manifests** (`/.well-known/ai-plugin.json`), reporting each UI's **access posture** (open / self-registration / login) so an instance that grants **unauthenticated use of the backend model** stands out. Findings are classed by kind: inference API (compute/cost abuse), web UI / gateway (proxied use or job submission → RCE), vector DB (exposed embeddings/collections), and plugin manifest (backend-API disclosure). Reports framework, version (native endpoint + `Server` header), auth state, model inventory (listed or **enumerated by probing known IDs**), and leaks (e.g. a llama.cpp system prompt, a ComfyUI GPU inventory, a Qdrant collection list, an OpenAI-plugin backend URL, or a model name exposed via a Prometheus `/metrics` endpoint). **Order-independent** identification. Feeds `-sV`. |
 | `nselib/llm.lua` | nselib | Shared detection library for the inference frameworks. |
 
 `llm-info` keys detection on read-only model-list/metadata endpoints, and by default also
@@ -217,9 +217,10 @@ Either install the lib or use the `--datadir` harness above (omitted below for b
 **Regression matrices** (fastest check) drive the mocks across every configuration and
 assert the expected output. `run_matrix.sh` covers MCP (protocol versions, all three
 transports, both auth states; 23 checks); `run_llm_matrix.sh` covers the inference
-detector (every framework, order-independent identification, the hello probe, credentials,
-model listing + enumeration, the Prometheus `/metrics` leak, and error-condition
-fingerprinting; 57 checks):
+detector (every framework - inference APIs, image-generation / ML-app servers, vector
+databases, web UIs / gateways, and plugin manifests - order-independent identification, the
+hello probe, credentials, model listing + enumeration, info leaks, the Prometheus `/metrics`
+leak, and error-condition fingerprinting; 119 checks):
 
 ```bash
 test/run_matrix.sh        # MCP;       exits non-zero on any failure
