@@ -381,13 +381,20 @@ function detect(host, port, opts)
   -- actively detect a list-less API (Anthropic) / otherwise-unidentified inference endpoint.
   if opts.probe then
     if result and not result.auth_required then
-      local conf
-      if result.framework == "Ollama" then
-        conf = hello_ollama(host, port, result.models and result.models[1], opts)
-      else
-        conf = hello_openai(host, port, result.models and result.models[1], opts)
+      -- Confirm inference with a hello only when it adds information. Skip it for a framework
+      -- that already lists its models: the list already proves a live inference endpoint, and
+      -- a hello would force a slow on-demand model load (e.g. seconds on Ollama) for no new
+      -- signal. A generic OpenAI match, or a server with no listed models, still gets the hello.
+      local listed = result.models and #result.models > 0
+      if result.framework == "OpenAI-compatible API" or not listed then
+        local conf
+        if result.framework == "Ollama" then
+          conf = hello_ollama(host, port, result.models and result.models[1], opts)
+        else
+          conf = hello_openai(host, port, result.models and result.models[1], opts)
+        end
+        if conf then result.inference = conf end
       end
-      if conf then result.inference = conf end
       -- Error-condition fingerprint: refine a generic OpenAI match and record an error sig.
       if result.endpoint == "/v1/models" or result.endpoint == "/v1/chat/completions" then
         local ref = refine_by_error(host, port, opts)
