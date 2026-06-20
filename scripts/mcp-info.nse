@@ -52,7 +52,7 @@ see the companion script `mcp-enum`. Shared logic lives in the `mcp` nselib.
 -- <elem key="server">acme-toolserver 1.4.2</elem>
 -- <elem key="auth">NONE (unauthenticated)</elem>
 
-author = "ben.williams@nccgroup.com"
+author = "Ben Williams <ben.williams@nccgroup.com>"
 license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
 categories = {"discovery", "safe", "version"}
 
@@ -79,14 +79,16 @@ action = function(host, port)
       if #names > 0 then out.capabilities = table.concat(names, ", ") end
     end
     out.session = transport.session_stateful and "stateful (Mcp-Session-Id issued)" or "stateless"
-    out.auth = "NONE (unauthenticated)"
+    local authed = opts.token ~= nil
+    out.auth = authed and "PROVIDED (Bearer token accepted)" or "NONE (unauthenticated)"
 
     -- Feed -sV.
     local legacy = transport.name:find("legacy") ~= nil
     port.version.name = "mcp"
     port.version.product = si.name or (legacy and "MCP server (legacy SSE)" or "MCP server")
     if si.version then port.version.version = si.version end
-    port.version.extrainfo = "MCP " .. (transport.protocol or "?") .. ", unauthenticated"
+    port.version.extrainfo = "MCP " .. (transport.protocol or "?") ..
+      (authed and ", authenticated (token)" or ", unauthenticated")
     nmap.set_port_version(host, port, "hardmatched")
 
     if transport.close then transport:close() end

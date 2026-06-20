@@ -16,12 +16,13 @@ Implements enough of MCP's HTTP transports to validate detection + enumeration:
 
   OAuth-gated (auth posture test):
     POST /authmcp                            -> 401 + WWW-Authenticate: Bearer
-                                                resource_metadata="…/.well-known/…"
+                                                resource_metadata=".../.well-known/..."
     GET  /.well-known/oauth-protected-resource -> protected-resource metadata JSON
 
 Usage:  python3 mock_mcp_server.py [port]      (default 8000)
 """
 import json
+import os
 import sys
 import threading
 import time
@@ -29,8 +30,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 SERVER_INFO = {"name": "acme-toolserver", "version": "1.4.2"}
-PROTOCOL = "2025-06-18"
+# Protocol version the mock advertises. Override to test that the scripts report whatever
+# the server negotiates, e.g. MCP_PROTOCOL=2024-11-05 / 2025-03-26 / 2025-06-18.
+PROTOCOL = os.environ.get("MCP_PROTOCOL", "2025-06-18")
 SESSION_ID = "mock-session-0001"
+
+# A valid bearer token for the OAuth-gated endpoint (/authmcp). Supplying
+# `--script-args mcp.token=<this>` lets the scripts complete an authenticated
+# handshake; any other/absent token gets a 401 challenge.
+AUTH_TOKEN = "mock-test-token-abc123"
 
 TOOLS = [
     {"name": "run_command",
@@ -117,11 +125,27 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urlparse(self.path).path.rstrip("/") or "/"
 
-        # OAuth-gated endpoint: reject unauthenticated handshake.
+        # OAuth-gated endpoint: a valid bearer token completes the handshake like
+        # /mcp; an absent/incorrect token gets a 401 challenge.
         if path == "/authmcp":
-            host = self.headers.get("Host", "localhost")
-            rm = f'Bearer resource_metadata="http://{host}/.well-known/oauth-protected-resource"'
-            self._empty(401, {"WWW-Authenticate": rm})
+            auth = self.headers.get("Authorization", "")
+            if auth != f"Bearer {AUTH_TOKEN}":
+                host = self.headers.get("Host", "localhost")
+                rm = f'Bearer resource_metadata="http://{host}/.well-known/oauth-protected-resource"'
+                self._empty(401, {"WWW-Authenticate": rm})
+                return
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length) if length else b""
+            try:
+                msg = json.loads(raw or b"{}")
+            except json.JSONDecodeError:
+                self._empty(400)
+                return
+            reply = handle_rpc(msg)
+            if reply is None:
+                self._empty(202)
+                return
+            self._json(200, reply, {"Mcp-Session-Id": SESSION_ID})
             return
 
         length = int(self.headers.get("Content-Length", 0))
@@ -214,13 +238,21 @@ class Handler(BaseHTTPRequestHandler):
         self._empty(404)
 
 
+class QuietServer(ThreadingHTTPServer):
+    """The raw-socket transport closes connections early by design, which would otherwise
+    spew ConnectionResetError/BrokenPipeError tracebacks. Swallow those; re-raise the rest."""
+    def handle_error(self, request, client_address):
+        if not isinstance(sys.exc_info()[1], (ConnectionResetError, BrokenPipeError)):
+            super().handle_error(request, client_address)
+
+
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
-    srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    print(f"mock MCP server on http://127.0.0.1:{port}")
+    srv = QuietServer(("127.0.0.1", port), Handler)
+    print(f"mock MCP server on http://127.0.0.1:{port} (protocol {PROTOCOL})")
     print("  streamable: POST /mcp, POST /mcpsse")
     print("  legacy:     GET /sse + POST /messages")
-    print("  oauth-gated: POST /authmcp + GET /.well-known/oauth-protected-resource")
+    print("  oauth-gated: POST /authmcp (Bearer token) + GET /.well-known/oauth-protected-resource")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

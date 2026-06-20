@@ -45,15 +45,33 @@ executed. Run `mcp-info` first/alongside for transport and version fingerprintin
 -- |   transport: streamable-http
 -- |   server: acme-toolserver 1.4.2 (protocol 2025-06-18)
 -- |   tools (4):
--- |     run_command [!! RISK: code-exec] - Execute a shell command on the host  (params: cmd*)
--- |     read_file [!! RISK: file-access] - Read a file from disk  (params: path*)
+-- |     run_command [RISK: code-exec] - Execute a shell command on the host  (params: cmd*)
+-- |     read_file [RISK: file-access] - Read a file from disk  (params: path*)
 -- |     search_web - Search the web  (params: q)
 -- |     get_weather - Get the weather for a city  (params: city)
 -- |   resources (2): file:///etc/, db://customers
 -- |   prompts (1): summarize
 -- |_  SECURITY: unauthenticated server exposes 2 risky tool(s) [code-exec, file-access]: run_command, read_file
+--
+-- @xmloutput
+-- <elem key="transport">streamable-http</elem>
+-- <elem key="server">acme-toolserver 1.4.2 (protocol 2025-06-18)</elem>
+-- <table key="tools (4)">
+--   <elem>run_command [RISK: code-exec] - Execute a shell command on the host  (params: cmd*)</elem>
+--   <elem>read_file [RISK: file-access] - Read a file from disk  (params: path*)</elem>
+--   <elem>search_web - Search the web  (params: q)</elem>
+--   <elem>get_weather - Get the weather for a city  (params: city)</elem>
+-- </table>
+-- <table key="resources (2)">
+--   <elem>file:///etc/</elem>
+--   <elem>db://customers</elem>
+-- </table>
+-- <table key="prompts (1)">
+--   <elem>summarize</elem>
+-- </table>
+-- <elem key="SECURITY">unauthenticated server exposes 2 risky tool(s) [code-exec, file-access]: run_command, read_file</elem>
 
-author = "ben.williams@nccgroup.com"
+author = "Ben Williams <ben.williams@nccgroup.com>"
 license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
 categories = {"discovery", "safe"}
 
@@ -82,7 +100,7 @@ action = function(host, port)
     for _, t in ipairs(data.tools) do
       local line = t.name
       if t.dangerous then
-        line = line .. " [!! RISK: " .. table.concat(t.categories, ", ") .. "]"
+        line = line .. " [RISK: " .. table.concat(t.categories, ", ") .. "]"
       end
       if t.description ~= "" then line = line .. " - " .. t.description:gsub("%s+", " ") end
       if opts.schemas and t.schema then

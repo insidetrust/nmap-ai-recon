@@ -1,10 +1,10 @@
-# nmap-mcp — NSE scripts for enumerating MCP servers
+# nmap-mcp - NSE scripts for enumerating MCP servers
 
 Nmap Scripting Engine (NSE) plugins to **discover, fingerprint, and enumerate the attack
 surface of Model Context Protocol (MCP) servers** during authorised security assessments.
 
 Neither **nmap** nor **Metasploit** can scan MCP *services* on the network (their "MCP"
-projects wrap those tools *as* MCP servers for an LLM — the inverse). **Tenable Web App
+projects wrap those tools *as* MCP servers for an LLM - the inverse). **Tenable Web App
 Scanning** does cover it commercially (plugins 114790/114791/114965). These scripts are the
 open, free, CLI-native equivalent. See [`PRD.md`](PRD.md) for the spec/roadmap and
 [`WRITEUP.md`](WRITEUP.md) for the research write-up.
@@ -21,19 +21,25 @@ Both scripts are **read-only**: they issue only the protocol handshake and `*/li
 methods. They never call `tools/call`, so no server-side tool is ever executed.
 
 ### Field-tested against real servers
-- **Official Python SDK (FastMCP)** — Streamable HTTP ✅
-- **`@modelcontextprotocol/server-everything`** — `streamableHttp` and `sse` (legacy) ✅
-- **Live OAuth-protected production server** (CloudFront-fronted) — correctly reported as
-  auth-required with its authorization server discovered, unauthenticated ✅
+Local frameworks:
+- **Official Python SDK (FastMCP 1.28.0)** - Streamable HTTP
+- **`@modelcontextprotocol/server-everything` 2.0.0** - `streamableHttp` and `sse` (legacy)
+
+Live public servers (read-only `initialize` + `*/list`):
+- **DeepWiki 2.14.3**, **Context7 3.2.0** - Streamable HTTP, full tool enumeration
+- **Cloudflare docs MCP** - legacy HTTP+SSE
+- **GitHub, Sentry, Linear** (OAuth-gated) - reported as auth-required with the
+  authorization server and scopes discovered from RFC 9728 metadata, unauthenticated
+- **OAuth-protected production server** (CloudFront-fronted) - same, unauthenticated
 
 Hardening these field tests forced (all handled automatically):
 - nmap's `http.post` **hangs** on servers that keep the SSE response stream open
   (FastMCP/uvicorn), so the transport uses **raw sockets**, reading only until the
   JSON-RPC reply arrives.
 - **TLS auto-fallback**: tries the heuristically-preferred mode, falls back on the other.
-- **Host header includes the port** — MCP servers validate it for DNS-rebinding protection
+- **Host header includes the port** - MCP servers validate it for DNS-rebinding protection
   and return `421` otherwise.
-- **`initialize` sends `protocolVersion` + `clientInfo`** — strict servers reject empty
+- **`initialize` sends `protocolVersion` + `clientInfo`** - strict servers reject empty
   params with `-32602`.
 
 ## Usage
@@ -72,26 +78,48 @@ nmap --datadir /tmp/mcp-datadir --script ./scripts/mcp-info.nse <target>
 ### Script arguments
 | Arg | Default | Meaning |
 |-----|---------|---------|
-| `mcp.paths` | 15 common paths (`/mcp`, `/`, `/sse`, `/api/mcp`, …) | Endpoint paths to probe |
+| `mcp.paths` | 15 common paths (`/mcp`, `/`, `/sse`, `/api/mcp`, ...) | Endpoint paths to probe |
 | `mcp.timeout` | `7000` | Per-request HTTP/socket timeout (ms) |
 | `mcp.ua` | a neutral Chrome UA | User-Agent to send (see WAF note below) |
 | `mcp.sse_path` | `/sse` | Legacy HTTP+SSE path |
+| `mcp.token` | _none_ | Bearer token sent as `Authorization: Bearer <token>` on the handshake and every `*/list` call - enumerates an auth-gated server (see below) |
 | `mcp.allports` | _off_ | Probe **every** open TCP port (ignore the port heuristic) |
 | `mcp-enum.schemas` | _off_ | Dump each tool's full JSON input schema |
+
+> **Auth posture:** with no token, an OAuth-gated server is reported as `auth: REQUIRED
+> (OAuth/Bearer)` and its authorization server/scopes are discovered from RFC 9728
+> metadata. With a valid `mcp.token`, the handshake completes and `mcp-info` reports
+> `auth: PROVIDED (Bearer token accepted)`; `mcp-enum` then enumerates the tool surface.
+
+#### Authenticated enumeration
+
+To enumerate a server that requires a bearer token, pass it via `mcp.token`. Avoid
+putting a token on the command line (it is visible in `ps`/shell history); use a
+`--script-args-file` with mode `0600` instead:
+
+```bash
+umask 077
+printf 'mcp.paths=/mcp\nmcp.token=%s\n' "$TOKEN" > mcp.args   # 0600, off the process list
+nmap -sT -Pn -p 443 --script "mcp-info,mcp-enum" --script-args-file mcp.args <target>
+rm -f mcp.args
+```
+
+The scripts remain **read-only** when authenticated: a supplied token is used only to
+complete `initialize` and the `*/list` calls - `tools/call` is never invoked.
 
 > **Port heuristic:** by default the scripts run on HTTP-fingerprinted ports, a built-in
 > list of common MCP/dev ports, and any service `-sV` could not identify but which
 > returned data (MCP behind uvicorn/ASGI is often not recognised as HTTP). Use `-sV` for
 > best coverage, or `mcp.allports=true` to force a probe on every open port.
 
-> **WAF note:** a User-Agent containing the string `nmap` is blocked by common WAFs — e.g.
+> **WAF note:** a User-Agent containing the string `nmap` is blocked by common WAFs - e.g.
 > AWS WAF/CloudFront returns `403`, masking a real MCP server that would otherwise return
 > `401`/`200`. These scripts therefore default to a neutral browser UA. Verified live
-> against an authorised CloudFront-fronted target: `nmap`-UA → 403, neutral UA → 401.
+> against an authorised CloudFront-fronted target: `nmap`-UA -> 403, neutral UA -> 401.
 
 ### `-sV` integration
 `nmap -sV --script mcp-info` makes the service column show `mcp` with the server
-name/version — the version-category script overrides the generic `http` match via
+name/version - the version-category script overrides the generic `http` match via
 `set_port_version`. The standalone `nmap-service-probes.mcp` fragment is a *supplement*
 (useful on ports not already hard-matched as HTTP); for MCP-over-HTTP the script override
 is the authoritative path because nmap's HTTP probe hard-matches first.
@@ -118,9 +146,9 @@ PORT     STATE SERVICE
 | mcp-enum:
 |   server: acme-toolserver 1.4.2 (protocol 2025-06-18)
 |   tools (5):
-|     run_command [!! RISK: code-exec] - Execute a shell command on the host  (params: cmd*)
-|     read_file [!! RISK: file-access] - Read a file from disk  (params: path*)
-|     process [!! RISK: file-access, network/ssrf] - Process the input data  (params: count, output_path*, target_url*)
+|     run_command [RISK: code-exec] - Execute a shell command on the host  (params: cmd*)
+|     read_file [RISK: file-access] - Read a file from disk  (params: path*)
+|     process [RISK: file-access, network/ssrf] - Process the input data  (params: count, output_path*, target_url*)
 |     search_web - Search the web for a query  (params: q)
 |     get_weather - Get the weather for a city  (params: city)
 |   resources (3): file:///etc/, db://customers, file:///{path} (template)
@@ -138,14 +166,29 @@ parameters are marked `*`.
 All examples assume the lib is reachable; either install it or use the `--datadir`
 harness shown above (commands below omit `--datadir` for brevity).
 
-**Mock server** (dependency-free) exercises every transport + the OAuth path:
+**Regression matrix** - the quickest check. `test/run_matrix.sh` brings up the mock in
+several configurations and asserts the expected output across protocol versions, all three
+transports, both auth states, and tools/resources/prompts content (23 checks):
+
+```bash
+test/run_matrix.sh        # exits non-zero if any cell fails
+```
+
+**Mock server** (dependency-free) exercises every transport + the OAuth path. The
+advertised MCP protocol version is overridable to test version negotiation:
 
 ```bash
 python3 test/mock_mcp_server.py 8000 &
 nmap -sT -Pn -p 8000 --script "mcp-info,mcp-enum" 127.0.0.1                       # streamable JSON
 nmap -sT -Pn -p 8000 --script mcp-info --script-args mcp.paths=/mcpsse 127.0.0.1  # SSE-framed
 nmap -sT -Pn -p 8000 --script mcp-info --script-args mcp.paths=/nope 127.0.0.1    # legacy fallback
-nmap -sT -Pn -p 8000 --script mcp-info --script-args mcp.paths=/authmcp 127.0.0.1 # OAuth-gated
+nmap -sT -Pn -p 8000 --script mcp-info --script-args mcp.paths=/authmcp 127.0.0.1 # OAuth-gated (discovery)
+# authenticated enumeration of the OAuth-gated endpoint:
+nmap -sT -Pn -p 8000 --script "mcp-info,mcp-enum" \
+     --script-args mcp.paths=/authmcp,mcp.token=mock-test-token-abc123 127.0.0.1
+
+# protocol-version negotiation (the script reports whatever the server advertises):
+MCP_PROTOCOL=2024-11-05 python3 test/mock_mcp_server.py 8000 &
 ```
 
 **Real servers** (field tests):
@@ -167,7 +210,7 @@ Verified against nmap 7.94 (Lua 5.4).
 ## Real-target example (authorised)
 
 Against an OAuth-protected production MCP server, the *unauthenticated* probe still
-fingerprints it and discovers its authorization server — without credentials:
+fingerprints it and discovers its authorization server - without credentials:
 
 ```
 443/tcp open  ssl/mcp MCP server (auth required) (OAuth-protected)

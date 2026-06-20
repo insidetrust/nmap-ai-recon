@@ -9,7 +9,7 @@
 -- All operations are read-only: only the protocol handshake and `*/list` methods are
 -- ever called. `tools/call` is never invoked.
 --
--- @author ben.williams@nccgroup.com
+-- @author Ben Williams <ben.williams@nccgroup.com>
 -- @copyright Same as Nmap--See https://nmap.org/book/man-legal.html
 
 local http = require "http"
@@ -104,6 +104,7 @@ function args()
     ua = stdnse.get_script_args("mcp.ua") or DEFAULT_UA,
     sse_path = stdnse.get_script_args("mcp.sse_path"),
     schemas = stdnse.get_script_args("mcp-enum.schemas"),
+    token = stdnse.get_script_args("mcp.token"),
   }
 end
 
@@ -173,13 +174,46 @@ local function tokenize(s)
   return set
 end
 
+-- Negation cue words. A risk phrase inside a clause that also contains one of these is
+-- almost always a cautionary disclaimer ("do not include passwords", "does not run shell
+-- commands"), not a capability, so it should not count as risk.
+local NEG_WORDS = {
+  ["not"] = true, ["never"] = true, ["avoid"] = true, ["without"] = true,
+  ["exclude"] = true, ["cannot"] = true,
+}
+
+-- True if the match at byte position `s` in `hay` sits in a negated clause: scan back to
+-- the start of the current sentence (previous . ! ? or newline) and look for a negation
+-- cue word (or an n't contraction) before the match.
+local function negated(hay, s)
+  local clause_start = 1
+  for i = s - 1, 1, -1 do
+    local c = hay:sub(i, i)
+    if c == "." or c == "!" or c == "?" or c == "\n" then clause_start = i + 1; break end
+  end
+  local prefix = hay:sub(clause_start, s - 1)
+  if prefix:find("n't", 1, true) then return true end
+  for tok in prefix:gmatch("%a+") do
+    if NEG_WORDS[tok] then return true end
+  end
+  return false
+end
+
 -- Match TEXT_RISK phrase patterns against free text, recording hit categories in `into`.
+-- Occurrences inside a negated clause (safety disclaimers) are skipped.
 local function match_text_risk(text, into)
   local hay = (text or ""):lower()
   for cat, pats in pairs(TEXT_RISK) do
     if not into[cat] then
       for _, p in ipairs(pats) do
-        if hay:find(p, 1, true) then into[cat] = true; break end
+        local init = 1
+        while true do
+          local s, e = hay:find(p, init, true)
+          if not s then break end
+          if not negated(hay, s) then into[cat] = true; break end
+          init = e + 1
+        end
+        if into[cat] then break end
       end
     end
   end
@@ -250,14 +284,15 @@ local function rpc_params(method)
   return {}
 end
 
-local function post_headers(ctx, ua)
+local function post_headers(ctx, opts)
   local h = {
     ["Content-Type"] = "application/json",
     ["Accept"] = "application/json, text/event-stream",
-    ["User-Agent"] = ua,
+    ["User-Agent"] = opts.ua,
   }
   if ctx and ctx.session_id then h["Mcp-Session-Id"] = ctx.session_id end
   if ctx and ctx.protocol then h["MCP-Protocol-Version"] = ctx.protocol end
+  if opts.token then h["Authorization"] = "Bearer " .. opts.token end
   return h
 end
 
@@ -388,6 +423,7 @@ local function raw_request(host, port, path, ctx, body, id, proto, opts)
   }
   if ctx and ctx.session_id then hdr[#hdr + 1] = "Mcp-Session-Id: " .. ctx.session_id end
   if ctx and ctx.protocol then hdr[#hdr + 1] = "MCP-Protocol-Version: " .. ctx.protocol end
+  if opts.token then hdr[#hdr + 1] = "Authorization: Bearer " .. opts.token end
   local req = table.concat(hdr, "\r\n") .. "\r\n\r\n" .. body
   if not sock:send(req) then sock:close(); return nil, nil end
   local m, buf = recv_until(sock, "", function(b)
@@ -444,7 +480,7 @@ local function open_streamable_path(host, port, path, opts)
         protocol = ctx.protocol,
         capabilities = r.capabilities,
         session_stateful = ctx.session_id ~= nil,
-        authenticated = false,
+        authenticated = opts.token ~= nil,
         request = function(_, method, id)
           return (streamable_rpc(host, port, path, ctx, method, id, opts))
         end,
@@ -476,7 +512,8 @@ local function open_legacy_path(host, port, sse_path, proto, opts)
     return nil
   end
   local get = "GET " .. sse_path .. " HTTP/1.1\r\nHost: " .. host_header(host, port) ..
-    "\r\nAccept: text/event-stream\r\nUser-Agent: " .. opts.ua .. "\r\n\r\n"
+    "\r\nAccept: text/event-stream\r\nUser-Agent: " .. opts.ua ..
+    (opts.token and ("\r\nAuthorization: Bearer " .. opts.token) or "") .. "\r\n\r\n"
   if not sock:send(get) then sock:close(); return nil end
 
   local buf = ""
@@ -497,7 +534,7 @@ local function open_legacy_path(host, port, sse_path, proto, opts)
     protocol = nil,
     capabilities = nil,
     session_stateful = true,
-    authenticated = false,
+    authenticated = opts.token ~= nil,
     _sock = sock,
     _buf = buf,
     _msgpath = msgpath,
@@ -506,7 +543,7 @@ local function open_legacy_path(host, port, sse_path, proto, opts)
     local payload = { jsonrpc = "2.0", method = method, params = rpc_params(method) }
     if id ~= nil then payload.id = id end
     http.post(host, port, self._msgpath,
-      { header = post_headers(nil, opts.ua), timeout = opts.timeout }, nil, gen(payload))
+      { header = post_headers(nil, opts), timeout = opts.timeout }, nil, gen(payload))
     if id == nil then return nil end
     local parsed
     parsed, self._buf = recv_until(self._sock, self._buf,

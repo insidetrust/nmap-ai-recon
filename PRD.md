@@ -1,26 +1,26 @@
 # PRD: Nmap NSE Plugins for Enumerating MCP Services
 
 **Status:** Draft v0.1
-**Author:** ben.williams@nccgroup.com
+**Author:** Ben Williams (NCC Group)
 **Date:** 2026-06-08
 
 ---
 
 ## 1. Problem statement
 
-Model Context Protocol (MCP) servers are proliferating rapidly inside enterprises — they
+Model Context Protocol (MCP) servers are proliferating rapidly inside enterprises - they
 expose tools, resources, and prompts that LLM agents can invoke. From a security
 perspective an MCP server is **remote-code-execution-as-a-service**: a single exposed,
 unauthenticated endpoint may offer tools such as `execute_shell`, `read_file`,
 `query_database`, or `send_email`. These are increasingly deployed by developers on dev
-ports (3000, 8000, 8080, 8888, …) with no authentication and `0.0.0.0` binds, exactly the
+ports (3000, 8000, 8080, 8888, ...) with no authentication and `0.0.0.0` binds, exactly the
 DNS-rebinding / unauthenticated-exposure failure mode the MCP spec warns about.
 
 ### Prior art (verified 2026-06-08)
 - **nmap:** nothing. The only "nmap + MCP" projects wrap nmap *as* an MCP tool for an LLM.
 - **Metasploit:** nothing for scanning MCP. `msfmcpd`/MetasploitMCP are the inverse (expose
   Metasploit *as* an MCP server).
-- **Tenable:** *does* cover this in **Web App Scanning (WAS)** — plugins `114790` MCP Server
+- **Tenable:** *does* cover this in **Web App Scanning (WAS)** - plugins `114790` MCP Server
   Detected, `114791` MCP Server Unauthenticated Access, `114965` MCP Server Tools Detected
   (family "Artificial Intelligence", released 2025-06-11), plus Nessus local plugin `241433`
   (installed MCP Python lib). So a commercial WAS capability exists; the gap is an **open,
@@ -44,7 +44,7 @@ Engagements that review AI systems therefore have no standard, scriptable, free 
 | G5 | Be a good NSE citizen | Correct categories, safe by default, configurable, low false-positive rate |
 
 ### Non-goals
-- Exploiting tools (no `tools/call` invocation by default — that executes attacker-chosen
+- Exploiting tools (no `tools/call` invocation by default - that executes attacker-chosen
   side effects). An opt-in, clearly-flagged probe may be considered later.
 - stdio-transport servers (local subprocess only; not network-reachable, out of scope).
 - Authentication brute force / OAuth token theft.
@@ -77,23 +77,23 @@ MCP uses **JSON-RPC 2.0**. Two network transports exist:
 
 ### 3.2 Legacy HTTP+SSE (spec 2024-11-05, deprecated but widely deployed)
 - Client GETs `/sse` with `Accept: text/event-stream`. First SSE event is
-  `event: endpoint` whose `data:` is the POST URL (e.g. `/messages?sessionId=…`) used for
+  `event: endpoint` whose `data:` is the POST URL (e.g. `/messages?sessionId=...`) used for
   subsequent JSON-RPC.
 
 ### 3.3 Discovery & auth signals
-- `.well-known/mcp.json` — optional discovery document.
-- OAuth 2.1 protected resources advertise `WWW-Authenticate: Bearer resource_metadata=…`
+- `.well-known/mcp.json` - optional discovery document.
+- OAuth 2.1 protected resources advertise `WWW-Authenticate: Bearer resource_metadata=...`
   and host `.well-known/oauth-protected-resource`.
 
 ## 4. Deliverables
 
-### 4.1 `mcp-info.nse` — detection & fingerprint (categories: `discovery`, `safe`, `version`)
+### 4.1 `mcp-info.nse` - detection & fingerprint (categories: `discovery`, `safe`, `version`)
 Probes candidate paths with an `initialize` handshake (Streamable HTTP), falls back to a
 legacy `/sse` probe, and checks `.well-known/mcp.json`. On success reports transport,
 endpoint path, `serverInfo`, `protocolVersion`, advertised capabilities, session-id
 presence, and auth posture. Sets the service version via `-sV` integration.
 
-### 4.2 `mcp-enum.nse` — attack-surface enumeration (categories: `discovery`, `safe`)
+### 4.2 `mcp-enum.nse` - attack-surface enumeration (categories: `discovery`, `safe`)
 Completes the handshake (handles session id + protocol-version header, SSE or JSON
 responses), then calls `tools/list`, `resources/list`, `resources/templates/list`, and
 `prompts/list`. Reports each tool's name + description (+ input-schema param names),
@@ -140,8 +140,8 @@ PORT     STATE SERVICE
 |_  auth: NONE (unauthenticated)
 | mcp-enum:
 |   tools (4):
-|     run_command   - Execute a shell command on the host   [!! DANGEROUS]
-|     read_file     - Read a file from disk                  [!! DANGEROUS]
+|     run_command   - Execute a shell command on the host   [DANGEROUS]
+|     read_file     - Read a file from disk                  [DANGEROUS]
 |     search_web    - Search the web
 |     get_weather   - Get the weather for a city
 |   resources (2): file:///etc/, db://customers
@@ -172,17 +172,17 @@ Script args: `mcp.paths` (override path list), `mcp.timeout`, `mcp.tls` (force h
 
 ## 9. Milestones
 1. **M1:** PRD, `mcp-info.nse`, `mcp-enum.nse`, mock server, README, local verification
-   against the mock. ✅ **DONE**
+   against the mock. **DONE**
 2. **M2:** legacy-SSE full enumeration (raw-socket transport, async response correlation);
    `.well-known/oauth-protected-resource` parsing; `-sV` flags MCP (via version-category
    `set_port_version` override; `nmap-service-probes.mcp` fragment as a supplement).
-   ✅ **DONE** — verified against the mock and against a real authorised target
-   (a managed OAuth-protected MCP service: the unauthenticated probe extracted the auth server
-   and scope). **Finding:** a User-Agent containing "nmap" is blocked by AWS WAF/CloudFront
+   **DONE** - verified against the mock and against a real authorised target
+   (a managed OAuth-protected MCP service: the unauthenticated probe extracted the auth
+   server and scope). **Finding:** a User-Agent containing "nmap" is blocked by AWS WAF/CloudFront
    (403 vs 401), so scripts now default to a neutral UA (`mcp.ua` to override).
 3. **M3:** refactor shared logic into the `mcp.lua` nselib; broaden path/port heuristics
    (15 paths, common-port set, unrecognized-service heuristic, `mcp.allports`); field-test
-   against popular MCP frameworks. ✅ **DONE** — verified against the official Python SDK
+   against popular MCP frameworks. **DONE** - verified against the official Python SDK
    (FastMCP), `@modelcontextprotocol/server-everything` in both `streamableHttp` and `sse`
    modes, and the real OAuth target. Field-testing forced real-world hardening, all now
    automatic: **raw-socket transport** (nmap's `http.post` hangs on FastMCP/uvicorn streamed
@@ -195,4 +195,4 @@ Script args: `mcp.paths` (override path list), `mcp.timeout`, `mcp.tls` (force h
 - Default port set vs. `-sV`-driven only? (Lean: match http/https + a small common-dev-port
   list, gated behind a script-arg to avoid scanning noise.)
 - Should an opt-in `--script-args mcp.unsafe=true` ever call a benign `tools/call`? (Deferred
-  — high blast radius, out of M1–M3.)
+  - high blast radius, out of M1-M3.)

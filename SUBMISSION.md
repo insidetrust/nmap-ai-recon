@@ -24,21 +24,34 @@ nmap --script-updatedb
 
 ## 2. Conformance checklist
 
-- [x] **NSEDoc complete** — `description`, `@usage`, `@args`, `@output`, `@xmloutput`
-      (mcp-info), verified to render via `nmap --script-help mcp-info,mcp-enum`.
-- [x] **License header** — each file carries `Same as Nmap--See https://nmap.org/book/man-legal.html`.
-- [x] **`author` set**, single string.
-- [x] **Categories** — `mcp-info`: `discovery, safe, version`; `mcp-enum`: `discovery, safe`.
-- [x] **`safe` justification** — only the protocol handshake and idempotent `*/list`
+- [x] **NSEDoc complete** - `description`, `@usage`, `@args`, `@output`, `@xmloutput`
+      (both `mcp-info` and `mcp-enum`), verified to render via
+      `nmap --script-help mcp-info,mcp-enum`.
+- [x] **License header** - each file carries the exact string
+      `Same as Nmap--See https://nmap.org/book/man-legal.html`.
+- [x] **`author`** - `author = "Ben Williams <ben.williams@nccgroup.com>"`, the `Name
+      <email>` form used by 80 shipped scripts (NCC Group credited via the domain); the
+      nselib carries the same in its `@author` NSEDoc tag.
+- [x] **Categories** - `mcp-info`: `discovery, safe, version`; `mcp-enum`: `discovery, safe`.
+      Each script carries `safe` (the required safe/intrusive classification); `mcp-info`
+      additionally carries `version` so it runs under `-sV`.
+- [x] **`safe` justification** - only the protocol handshake and idempotent `*/list`
       methods are sent; **`tools/call` is never invoked**, so no server-side side effects.
-- [x] **No banned APIs** — uses `nmap`, `http`, `json`, `shortport`, `stdnse`, `stringaux`,
+- [x] **No banned APIs** - uses `nmap`, `http`, `json`, `shortport`, `stdnse`, `stringaux`,
       `string`, `table` only. No `os`/`io`/filesystem; no `Math.random`/wallclock deps.
-- [x] **2-space indentation**, locals required at top, `_ENV = stdnse.module(...)`/`return _ENV`
-      idiom in the nselib.
-- [x] **Timeouts honoured** — `mcp.timeout` (default 7000 ms); raw sockets set timeouts.
-- [x] **Low false-positive design** — match keyed on a valid JSON-RPC `initialize` result.
-- [x] **Tested** — mock (all transports + OAuth) and real servers (FastMCP,
-      `server-everything` streamable + sse, live OAuth target). nmap 7.94 / Lua 5.4.
+- [x] **2-space indentation**, no tabs, no trailing whitespace; locals `require`d at top,
+      `_ENV = stdnse.module(...)`/`return _ENV` idiom in the nselib.
+- [x] **`shortport` portrule** - built on `shortport.http` / `shortport.ssl` plus an
+      MCP-specific port/`-sV`-unrecognised heuristic; no hand-rolled port parsing.
+- [x] **`stdnse.output_table()`** for ordered, XML-renderable structured output.
+- [x] **Timeouts honoured** - `mcp.timeout` (default 7000 ms); raw sockets set timeouts.
+- [x] **Low false-positive design** - match keyed on a valid JSON-RPC `initialize` result.
+- [x] **`script.db` regenerated** - `nmap --script-updatedb` registers both scripts with
+      their categories; commit the updated `scripts/script.db` in the PR.
+- [x] **Tested** - bundled mock covers every transport + OAuth + authenticated token.
+      Field-tested previously against FastMCP and `server-everything` (streamable + sse)
+      and a live OAuth target. nmap 7.94 / Lua 5.4. (Re-run the real-framework matrix on a
+      current nmap before opening the PR.)
 
 ## 3. Suggested commit / branch
 
@@ -48,11 +61,21 @@ git checkout -b nse-mcp
 cp <thisrepo>/scripts/mcp-info.nse scripts/
 cp <thisrepo>/scripts/mcp-enum.nse scripts/
 cp <thisrepo>/scripts/mcp.lua      nselib/
-git add scripts/mcp-info.nse scripts/mcp-enum.nse nselib/mcp.lua
+nmap --script-updatedb                       # regenerate scripts/script.db
+git add scripts/mcp-info.nse scripts/mcp-enum.nse nselib/mcp.lua scripts/script.db
 git commit -m "NSE: add mcp-info, mcp-enum and mcp nselib for MCP server enumeration"
 git push origin nse-mcp
 # then open a PR against nmap/nmap
 ```
+
+**Then notify the dev list.** Per `CONTRIBUTING.md`, after opening the PR send a short
+email to `dev@nmap.org` referencing it (not all committers watch GitHub; PRs left only on
+GitHub can sit unreviewed). Subscribe first via `dev-subscribe@nmap.org`; archive:
+<https://seclists.org/nmap-dev/>.
+
+**Contribution licensing.** Per the nmap `HACKING` file, submitting a patch/PR is taken as
+offering the Nmap Project (Nmap Software LLC) an unlimited, non-exclusive right to reuse,
+modify, and relicense the code. State any alternative terms explicitly in the PR if needed.
 
 ## 4. Draft PR description
 
@@ -61,20 +84,24 @@ git push origin nse-mcp
 > Adds two scripts and a shared library for discovering and enumerating Model Context
 > Protocol (MCP) servers over HTTP(S):
 >
-> - **`mcp-info`** (`discovery, safe, version`) — performs the JSON-RPC `initialize`
+> - **`mcp-info`** (`discovery, safe, version`) - performs the JSON-RPC `initialize`
 >   handshake (Streamable HTTP), falls back to the legacy HTTP+SSE transport, and parses
 >   OAuth 2.1 protected-resource metadata (RFC 9728) for auth-gated servers. Reports
 >   transport, endpoint, server name/version, protocol version, capabilities, session
 >   statefulness, and auth posture; integrates with `-sV`.
-> - **`mcp-enum`** (`discovery, safe`) — completes the handshake and calls the read-only
+> - **`mcp-enum`** (`discovery, safe`) - completes the handshake and calls the read-only
 >   `tools/list`, `resources/list`, `resources/templates/list`, and `prompts/list`,
 >   reporting the tool/resource/prompt attack surface and heuristically flagging dangerous
 >   tools and unauthenticated exposure.
-> - **`nselib/mcp.lua`** — shared transport (both Streamable HTTP and legacy SSE over raw
+> - **`nselib/mcp.lua`** - shared transport (both Streamable HTTP and legacy SSE over raw
 >   sockets), handshake, OAuth discovery, and enumeration helpers.
 >
-> **Safety:** read-only — only `initialize` and `*/list` are issued; `tools/call` is never
-> invoked.
+> Both scripts accept an optional `mcp.token` bearer token to enumerate auth-gated
+> servers; without it, OAuth-protected servers are still fingerprinted and their
+> authorization server/scopes discovered from RFC 9728 metadata.
+>
+> **Safety:** read-only - only `initialize` and `*/list` are issued; `tools/call` is never
+> invoked, with or without a token.
 >
 > **Why raw sockets:** real Streamable-HTTP servers (FastMCP/uvicorn) keep the SSE response
 > stream open after replying, which makes `http.post` block until timeout; the library

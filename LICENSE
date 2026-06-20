@@ -7,7 +7,7 @@ upstream contribution to the Nmap Scripting Engine.
 NSE components (for upstream compatibility)
 -------------------------------------------
 The following files are offered under the same terms as Nmap itself (the Nmap Public
-Source License, NPSL — see https://nmap.org/npsl/), so they can be contributed to and
+Source License, NPSL - see https://nmap.org/npsl/), so they can be contributed to and
 redistributed within the Nmap project:
 
     scripts/mcp-info.nse
@@ -20,7 +20,7 @@ Each NSE file carries the standard header line:
 
 Supporting material
 -------------------
-The remaining files (test harnesses under test/, and the Markdown documentation —
+The remaining files (test harnesses under test/, and the Markdown documentation -
 README.md, PRD.md, WRITEUP.md, SUBMISSION.md, CHANGELOG.md) are released under the
 MIT License:
 
