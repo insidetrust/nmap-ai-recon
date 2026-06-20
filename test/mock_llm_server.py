@@ -3,9 +3,12 @@
 
 One framework per process, selected by the LLM_MODE env var (default: ollama):
   ollama | openai | vllm | vllm_stealth | sglang | tgi | tei | llamacpp | koboldcpp
-  | triton | torchserve | authed | anthropic
+  | triton | torchserve | torchserve_inference | authed | anthropic | openai_plugin
   | openwebui | openwebui_open | openwebui_onboarding | librechat | nextchat | lobechat
   | flowise | anythingllm
+  | xinference | localai | litellm | litellm_swagger | bentoml | comfyui | sdwebui | gradio
+  | ray | chromadb | qdrant | weaviate | milvus | marqo | jan | langflow | lollms
+  | lobechat_welcome
 
 Usage:  LLM_MODE=vllm python3 mock_llm_server.py [port]      (default 8000)
 """
@@ -93,6 +96,12 @@ ROUTES = {
         {"modelName": "resnet18", "modelUrl": "resnet18.mar"},
         {"modelName": "bert", "modelUrl": "bert.mar"},
     ]}},
+    # TorchServe exposing only its inference port (8080): no /models list, but the OpenAPI-style
+    # /api-description document (title "TorchServe APIs") still identifies it.
+    "torchserve_inference": {"/api-description": {
+        "openapi": "3.0.1", "info": {"title": "TorchServe APIs",
+                                     "description": "TorchServe is a tool for serving neural net models"},
+        "paths": {"/ping": {"get": {"operationId": "ping"}}}}},
     "authed": {},   # everything 401 unless a valid token is presented
     # Web UIs / gateways: front-ends that proxy to a backend, not inference endpoints. The
     # access posture (open / self-registration / login) is read from each UI's config.
@@ -118,6 +127,87 @@ ROUTES = {
     "flowise": {"/api/v1/version": {"version": "2.2.0"}},
     "anythingllm": {"/api/ping": {"online": True},
                     "/": "<!doctype html><title>AnythingLLM</title><div id=app></div>"},
+
+    # ---- Inference / serving frameworks added beyond the original OpenAI-family set ----
+    # Xinference: OpenAI-compatible; disambiguated from a plain OpenAI server by the
+    # Xinference-only /v1/cluster/info (supervisor/worker metadata + version).
+    "xinference": {"/v1/cluster/info": {"supervisor": "127.0.0.1:9997", "workers": 1,
+                                        "version": "0.16.3", "git_version": "0.16.3"},
+                   "/v1/models": {"object": "list", "data": [
+                       {"id": "qwen2.5-instruct", "object": "model", "owned_by": "xinference"}]}},
+    # LocalAI: OpenAI drop-in; the LocalAI-only /models/available gallery distinguishes it.
+    "localai": {"/models/available": [{"name": "luna-ai-llama2", "gallery": "model-gallery"}],
+                "/v1/models": {"object": "list", "data": [
+                    {"id": "gpt-4", "object": "model"}, {"id": "luna-ai-llama2", "object": "model"}]}},
+    # LiteLLM proxy/gateway: readiness payload carries litellm_version.
+    "litellm": {"/health/readiness": {"status": "healthy", "db": "connected",
+                                      "litellm_version": "1.44.8"}},
+    "litellm_swagger": {"/": "<!doctype html><title>LiteLLM API - Swagger UI</title>"},
+    # BentoML prediction service: OpenAPI schema names BentoML in info.title.
+    "bentoml": {"/docs.json": {"openapi": "3.0.2",
+                               "info": {"title": "my_service (BentoML Prediction Service)",
+                                        "version": "1.3.0",
+                                        "description": "BentoML prediction service"}}},
+    # ComfyUI: /system_stats returns system.comfyui_version + a device inventory.
+    "comfyui": {"/system_stats": {"system": {"os": "posix", "python_version": "3.11.9",
+                                             "comfyui_version": "0.3.4", "pytorch_version": "2.4.1"},
+                                  "devices": [{"name": "cuda:0 NVIDIA RTX 4090", "type": "cuda",
+                                               "vram_total": 25757220864, "vram_free": 24000000000}]}},
+    # Stable Diffusion WebUI (AUTOMATIC1111): the served page carries the unambiguous trio,
+    # and /sdapi/v1/options leaks the loaded checkpoint.
+    "sdwebui": {"/": ('<!doctype html><html><head><script src="hires_fix.js"></script>'
+                      '<meta name="generator" content="AUTOMATIC1111"></head>'
+                      '<body><script>window.gradio_config = {};</script></body></html>'),
+                "/sdapi/v1/options": {"sd_model_checkpoint": "v1-5-pruned-emaonly.safetensors"}},
+    # Gradio: /config returns version + a component/dependency graph (and app mode).
+    "gradio": {"/config": {"version": "4.44.0", "mode": "blocks", "components": [],
+                           "dependencies": []},
+               "/": '<!doctype html><html><body><gradio-app></gradio-app></body></html>'},
+    # Ray dashboard: /api/version is wrapped as {"result":true,"data":{...}} with the Ray version.
+    "ray": {"/api/version": {"result": True, "msg": "",
+                             "data": {"version": "1.0", "rayVersion": "2.35.0",
+                                      "rayCommit": "abc123", "sessionName": "session_2024"}}},
+
+    # ---- Vector databases ----
+    # ChromaDB: heartbeat returns {"nanosecond heartbeat": <int>}; version endpoint is a string.
+    "chromadb": {"/api/v2/heartbeat": {"nanosecond heartbeat": 1719795600000000000},
+                 "/api/v2/version": "0.5.5"},
+    # Qdrant: REST root is the telemetry banner; /collections lists stored collections.
+    "qdrant": {"/": {"title": "qdrant - vector search engine", "version": "1.11.0",
+                     "commit": "ffda0b90c8c44fc43c99adab518b9787fe57bde6"},
+               "/collections": {"result": {"collections": [{"name": "documents"},
+                                                            {"name": "embeddings"}]},
+                                "status": "ok", "time": 0.00003}},
+    # Weaviate: /v1/meta returns hostname + version + modules.
+    "weaviate": {"/v1/meta": {"hostname": "http://[::]:8080", "version": "1.26.1",
+                              "modules": {"text2vec-openai": {}}}},
+    # Milvus / Attu console: the served page title carries "Milvus".
+    "milvus": {"/": "<!doctype html><title>Milvus Insight</title><div id=root></div>"},
+    # Marqo tensor search engine: the root welcome banner + version.
+    "marqo": {"/": {"message": "Welcome to Marqo", "version": "2.11.0"}},
+
+    # ---- Additional web UIs / gateways ----
+    # Jan: OpenAI-compatible desktop server; the Jan-only /healthz pairs with /v1/models.
+    "jan": {"/healthz": {"status": "ok"},
+            "/v1/models": {"object": "list", "data": [
+                {"id": "llama3.2-3b-instruct", "object": "model"}]}},
+    # Langflow: BOTH it and Flowise serve /api/v1/version; Langflow's carries package=Langflow.
+    "langflow": {"/api/v1/version": {"version": "1.0.19", "package": "Langflow",
+                                     "main": "1.0.19"},
+                 "/": "<!doctype html><title>Langflow</title><div id=root></div>"},
+    # LoLLMs WebUI: the served page carries the literal welcome banner.
+    "lollms": {"/": "<!doctype html><html><body><h1>LoLLMS WebUI - Welcome</h1></body></html>"},
+    # LobeChat served via the /welcome page (manifest renamed/absent).
+    "lobechat_welcome": {"/welcome": "<!doctype html><body><h1>Welcome to LobeChat</h1></body>"},
+    # OpenAI plugin manifest: /.well-known/ai-plugin.json describes a backend API for an LLM
+    # agent (schema_version + name_for_model anchor); the api.url discloses the backend endpoint.
+    "openai_plugin": {"/.well-known/ai-plugin.json": {
+        "schema_version": "v1", "name_for_model": "weather",
+        "name_for_human": "Weather Plugin",
+        "description_for_model": "Get the weather", "description_for_human": "Get the weather",
+        "auth": {"type": "none"},
+        "api": {"type": "openapi", "url": "https://example.com/openapi.yaml"},
+        "logo_url": "https://example.com/logo.png", "contact_email": "x@example.com"}},
 }
 
 VALID_TOKEN = "Bearer test-llm-key-abc123"
@@ -213,6 +303,14 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, {"object": "chat.completion",
                                             "choices": [{"message": {"content": "Hi"}}]})
                 return self._send(401, {"error": {"message": "missing key"}})
+
+        # Triton/KServe read-only model-repository index (a listing call, not a load/unload):
+        # POST /v2/repository/index -> [{"name":...,"version":...,"state":...}, ...].
+        if path == "/v2/repository/index" and MODE == "triton":
+            return self._send(200, [
+                {"name": "resnet50", "version": "1", "state": "READY"},
+                {"name": "bert_qa", "version": "2", "state": "READY"},
+            ])
 
         # Ollama native generate.
         if path == "/api/generate" and MODE == "ollama":

@@ -93,6 +93,18 @@ local function jparse(body)
   return nil
 end
 
+-- Read-only HTTP POST, carrying any supplied credential. A few frameworks expose read-only
+-- LISTING endpoints over POST (e.g. Triton's model-repository index): these list state, they
+-- do not run inference or mutate anything. Returns (status, body) or nil. (The active "hello"
+-- probe has its own POST helper later; this one is for read-only detection.)
+local function post_ro(host, port, path, body, opts)
+  local h = { ["User-Agent"] = opts.ua, ["Content-Type"] = "application/json" }
+  if opts.headers then for k, v in pairs(opts.headers) do h[k] = v end end
+  local resp = http.post(host, port, path, { header = h, timeout = opts.timeout }, nil, body)
+  if not resp then return nil end
+  return resp.status, resp.body
+end
+
 --------------------------------------------------------------------------------
 -- Framework detectors. Each returns a result table or nil:
 --   { framework, endpoint, version, models={}, auth_required=bool, leaks={}, server }
@@ -242,25 +254,52 @@ local function detect_llamacpp(host, port, opts)
   return nil
 end
 
+-- Enumerate a Triton/KServe server's models via the read-only model-repository index
+-- (POST /v2/repository/index -> [{"name":...,"version":...,"state":...}, ...]). This is a
+-- listing call (it never loads/unloads a model), so it stays within read-only detection.
+local function enrich_triton_models(host, port, r, opts)
+  local st, body = post_ro(host, port, "/v2/repository/index", "{}", opts)
+  if st ~= 200 then return end
+  local doc = jparse(body)
+  if type(doc) ~= "table" then return end
+  for _, m in ipairs(doc) do
+    if type(m) == "table" and m.name then
+      r.models[#r.models + 1] = m.name .. (m.version and (":" .. tostring(m.version)) or "")
+    end
+  end
+end
+
 -- NVIDIA Triton / KServe v2 inference protocol: GET /v2 server metadata, /v2/health/ready.
+-- The model repository index (POST /v2/repository/index, a read-only listing - it lists
+-- models, it does not load/unload them) enumerates the served models when reachable.
 local function detect_triton(host, port, opts)
   local st, body = get(host, port, "/v2", opts)
   if st == 200 then
     local doc = jparse(body)
     if doc and doc.name then
-      return { framework = "Triton/KServe (v2 inference)", endpoint = "/v2",
-               version = doc.version, models = {}, auth_required = false, server = doc.name, confidence = 85 }
+      local r = { framework = "Triton/KServe (v2 inference)", endpoint = "/v2",
+                  version = doc.version, models = {}, auth_required = false, server = doc.name, confidence = 85 }
+      enrich_triton_models(host, port, r, opts)
+      return r
     end
   end
   local hs = get(host, port, "/v2/health/ready", opts)
   if hs == 200 then
-    return { framework = "KServe/Triton (v2 inference)", endpoint = "/v2/health/ready",
-             models = {}, auth_required = false, confidence = 75 }
+    local r = { framework = "KServe/Triton (v2 inference)", endpoint = "/v2/health/ready",
+                models = {}, auth_required = false, confidence = 75 }
+    enrich_triton_models(host, port, r, opts)
+    return r
   end
   return nil
 end
 
--- TorchServe management API: GET /models -> {"models":[{"modelName": ...}]}.
+-- TorchServe: a PyTorch model-serving framework. The management API (default 8081) lists the
+-- served models at GET /models ({"models":[{"modelName": ...}]}); the inference API (default
+-- 8080) does not, but both serve the OpenAPI-style /api-description document
+-- ({"openapi":..., "info":{"title":"TorchServe APIs"}, ... "operationId": ...}). The /models
+-- listing is the richer signal (it names the models and marks the exposed management API), so
+-- it is preferred; /api-description is the fallback that also catches an instance exposing only
+-- its inference port. (runZero torchserve-detect.yaml covers the same three signals.)
 local function detect_torchserve(host, port, opts)
   local st, body = get(host, port, "/models", opts)
   if st == 200 then
@@ -272,7 +311,361 @@ local function detect_torchserve(host, port, opts)
                models = models, auth_required = false, confidence = 75 }
     end
   end
+  -- Inference-port / management-port fallback: the /api-description OpenAPI document. The
+  -- literal title "TorchServe APIs" is the unambiguous anchor (operationId alone is generic).
+  local ds, db = get(host, port, "/api-description", opts)
+  if ds == 200 and db and db:find("TorchServe APIs", 1, true) then
+    return { framework = "TorchServe (inference API)", endpoint = "/api-description",
+             models = {}, auth_required = false, confidence = 72 }
+  end
   return nil
+end
+
+-- OpenAI plugin manifest: a host advertising a ChatGPT/OpenAI-style plugin publishes
+-- GET /.well-known/ai-plugin.json -> {"schema_version":...,"name_for_model":...,
+-- "api":{"url":...},"auth":{...}}. This is a plugin/integration descriptor (not an inference
+-- endpoint itself); it discloses the backend API URL the plugin drives and the plugin's auth
+-- type, so it is reported as a gateway-class finding. The schema_version + name_for_model pair
+-- is the unambiguous anchor (matches nuclei openai-plugin.yaml).
+local function detect_openai_plugin(host, port, opts)
+  local st, body = get(host, port, "/.well-known/ai-plugin.json", opts)
+  if st == 200 then
+    local doc = jparse(body)
+    if doc and doc.schema_version ~= nil and (doc.name_for_model ~= nil or doc.name_for_human ~= nil) then
+      -- gateway=true also keeps the active inference hello away from this (non-inference) match.
+      local r = { framework = "OpenAI plugin manifest", endpoint = "/.well-known/ai-plugin.json",
+                  gateway = true, plugin = true, models = {}, auth_required = false, leaks = {}, confidence = 84 }
+      if type(doc.name_for_human) == "string" then r.plugin_name = doc.name_for_human end
+      -- The manifest discloses the backend API endpoint the plugin drives.
+      local api = type(doc.api) == "table" and doc.api or nil
+      if api and type(api.url) == "string" and api.url ~= "" then
+        r.leaks[#r.leaks + 1] = "backend API URL disclosed via plugin manifest (" .. tostring(api.url) .. ")"
+      end
+      return r
+    end
+  end
+  return nil
+end
+
+-- Xinference (Xorbits Inference): an OpenAI-compatible distributed inference server. Its
+-- /v1/models is the standard list shape, so it is disambiguated from a plain OpenAI server
+-- by its dedicated /v1/cluster/info (cluster supervisor/worker metadata) and the served-model
+-- registry endpoint /v1/models/instances. The web console title also carries "xinference".
+local function detect_xinference(host, port, opts)
+  local st, body = get(host, port, "/v1/cluster/info", opts)
+  if st == 200 then
+    local doc = jparse(body)
+    -- /v1/cluster/info returns supervisor/worker/version info; the supervisor key is unique.
+    if doc and (doc.supervisor ~= nil or doc.workers ~= nil or doc.git_version ~= nil) then
+      local r = { framework = "Xinference (OpenAI-compatible)", endpoint = "/v1/cluster/info",
+                  version = doc.version or doc.git_version, models = {}, auth_required = false, confidence = 86 }
+      local _, mb = get(host, port, "/v1/models", opts)
+      local md = jparse(mb)
+      if md and type(md.data) == "table" then
+        for _, m in ipairs(md.data) do r.models[#r.models + 1] = m.id or "?" end
+      end
+      return r
+    end
+  elseif st == 401 or st == 403 then
+    return { framework = "Xinference (OpenAI-compatible)", endpoint = "/v1/cluster/info",
+             auth_required = true, confidence = 86 }
+  end
+  return nil
+end
+
+-- LocalAI: a self-hosted OpenAI drop-in. Its read-only /readyz and the LocalAI-specific
+-- backends listing distinguish it from a generic OpenAI server; the web UI title also carries
+-- "LocalAI". /backend/monitor and /models/available are LocalAI-only routes.
+local function detect_localai(host, port, opts)
+  -- /readyz returns 200 with no body; combine with the LocalAI-specific /models/available
+  -- (the model gallery), which a plain OpenAI server does not serve.
+  local st, body = get(host, port, "/models/available", opts)
+  if st == 200 then
+    local doc = jparse(body)
+    if type(doc) == "table" then
+      local r = { framework = "LocalAI (OpenAI-compatible)", endpoint = "/models/available",
+                  models = {}, auth_required = false, confidence = 84 }
+      -- Prefer the loaded models from /v1/models over the (large) gallery listing.
+      local _, mb = get(host, port, "/v1/models", opts)
+      local md = jparse(mb)
+      if md and type(md.data) == "table" then
+        for _, m in ipairs(md.data) do r.models[#r.models + 1] = m.id or "?" end
+      end
+      return r
+    end
+  end
+  -- Fall back to the served web UI / Swagger title.
+  local hs, hb = get(host, port, "/", opts)
+  if hs == 200 and hb and (hb:find('alt="LocalAI Logo"', 1, true) or hb:find("<title>LocalAI", 1, true)) then
+    return { framework = "LocalAI (OpenAI-compatible)", endpoint = "/", models = {},
+             auth_required = false, confidence = 80 }
+  end
+  return nil
+end
+
+-- LiteLLM proxy / gateway: a unified front-end to 100+ providers. Identified by its
+-- read-only health/metadata routes (/health/readiness returns a LiteLLM-shaped JSON, and the
+-- root serves the "LiteLLM API - Swagger UI" docs). Reported as a gateway: its /chat/completions
+-- proxies a configured backend, often callable with a virtual key, so it fronts real inference.
+local function detect_litellm(host, port, opts)
+  local st, body = get(host, port, "/health/readiness", opts)
+  if st == 200 then
+    local doc = jparse(body)
+    -- LiteLLM's readiness payload carries litellm_version / a db status; the version key is
+    -- the unambiguous anchor (a bare FastAPI /health would not return it).
+    if doc and (doc.litellm_version ~= nil or doc.litellm_overhead_latency_metric ~= nil) then
+      return { framework = "LiteLLM (proxy/gateway)", endpoint = "/health/readiness", gateway = true,
+               version = doc.litellm_version, models = {}, auth_required = false, confidence = 86 }
+    end
+  end
+  -- Swagger UI title (the most common public signature of an exposed LiteLLM proxy).
+  local hs, hb = get(host, port, "/", opts)
+  if hs == 200 and hb and hb:find("<title>LiteLLM API - Swagger UI", 1, true) then
+    return { framework = "LiteLLM (proxy/gateway)", endpoint = "/", gateway = true, models = {},
+             auth_required = false, confidence = 82 }
+  end
+  return nil
+end
+
+-- BentoML prediction service: a Python ML-serving framework. Read-only /readyz and /livez
+-- health probes plus the served "BentoML Prediction Service" Swagger title identify it; the
+-- OpenAPI doc at /docs.json carries the bento name/version. Generic ML serving (not just LLM).
+local function detect_bentoml(host, port, opts)
+  -- The OpenAPI schema is the richest read-only signal: its info.title/description name BentoML.
+  local st, body = get(host, port, "/docs.json", opts)
+  if st == 200 then
+    local doc = jparse(body)
+    local info = type(doc) == "table" and type(doc.info) == "table" and doc.info or nil
+    if info and ((type(info.title) == "string" and info.title:find("BentoML", 1, true))
+        or (type(info.description) == "string" and info.description:find("BentoML", 1, true))) then
+      return { framework = "BentoML (prediction service)", endpoint = "/docs.json",
+               version = info.version, models = {}, auth_required = false, confidence = 84 }
+    end
+  end
+  -- Swagger UI title fallback.
+  local hs, hb = get(host, port, "/", opts)
+  if hs == 200 and hb and hb:find("<title>BentoML Prediction Service", 1, true) then
+    return { framework = "BentoML (prediction service)", endpoint = "/", models = {},
+             auth_required = false, confidence = 80 }
+  end
+  return nil
+end
+
+-- ComfyUI: a node-based Stable Diffusion workflow server. The read-only /system_stats endpoint
+-- returns {"system":{"comfyui_version":...,"os":...,"python_version":...},"devices":[...]} -
+-- a precise, version-bearing JSON anchor (far stronger than the HTML <title>ComfyUI). Custom
+-- nodes can execute arbitrary code, so an exposed instance is a notable finding.
+local function detect_comfyui(host, port, opts)
+  local st, body = get(host, port, "/system_stats", opts)
+  if st == 200 then
+    local doc = jparse(body)
+    local sys = type(doc) == "table" and type(doc.system) == "table" and doc.system or nil
+    if sys and (sys.comfyui_version ~= nil or sys.python_version ~= nil) and doc.devices ~= nil then
+      local r = { framework = "ComfyUI (Stable Diffusion workflow server)", endpoint = "/system_stats",
+                  version = sys.comfyui_version, models = {}, auth_required = false, leaks = {}, confidence = 88 }
+      -- The device inventory (GPU model + VRAM) leaks the host's compute fingerprint.
+      if type(doc.devices) == "table" and doc.devices[1] and doc.devices[1].name then
+        r.leaks[#r.leaks + 1] = "GPU/device inventory disclosed via /system_stats (" .. tostring(doc.devices[1].name) .. ")"
+      end
+      return r
+    end
+  end
+  -- HTML title fallback (older builds without /system_stats reachable).
+  local hs, hb = get(host, port, "/", opts)
+  if hs == 200 and hb and hb:find("<title>ComfyUI", 1, true) then
+    return { framework = "ComfyUI (Stable Diffusion workflow server)", endpoint = "/",
+             models = {}, auth_required = false, confidence = 80 }
+  end
+  return nil
+end
+
+-- Stable Diffusion WebUI (AUTOMATIC1111): the most popular SD image-generation UI. Its served
+-- page contains the unambiguous trio "AUTOMATIC1111" + "gradio_config" + "hires_fix.js"; the
+-- read-only /sdapi/v1/options API (set on a real A1111) exposes the loaded checkpoint.
+local function detect_sdwebui(host, port, opts)
+  local hs, hb = get(host, port, "/", opts)
+  if hs == 200 and hb and hb:find("AUTOMATIC1111", 1, true)
+      and hb:find("gradio_config", 1, true) and hb:find("hires_fix.js", 1, true) then
+    local r = { framework = "Stable Diffusion WebUI (AUTOMATIC1111)", endpoint = "/",
+                models = {}, auth_required = false, leaks = {}, confidence = 87 }
+    -- The read-only options API leaks the currently-loaded checkpoint/model on an open instance.
+    local os_, ob = get(host, port, "/sdapi/v1/options", opts)
+    local od = jparse(ob)
+    if os_ == 200 and od and od.sd_model_checkpoint then
+      r.models = { od.sd_model_checkpoint }
+    end
+    return r
+  end
+  return nil
+end
+
+-- Gradio: the ML-demo framework underlying many model front-ends (SD WebUI, image/audio demos,
+-- chat UIs). Its served page and /config carry gradio-app markers; /config (read-only) exposes
+-- the app's component graph and version. Reported as a UI/demo front-end. Checked at a lower
+-- confidence than the specific apps built on it (SD WebUI), so those win when both match.
+local function detect_gradio(host, port, opts)
+  -- The /config endpoint is the precise anchor: a real Gradio app returns a JSON config with a
+  -- version and a components/dependencies graph.
+  local st, body = get(host, port, "/config", opts)
+  if st == 200 then
+    local doc = jparse(body)
+    if doc and (doc.version ~= nil and (doc.components ~= nil or doc.dependencies ~= nil or doc.mode ~= nil)) then
+      return { framework = "Gradio (ML app/demo front-end)", endpoint = "/config", ui = true,
+               version = doc.version, models = {}, auth_required = false, access = "unknown", confidence = 70 }
+    end
+  end
+  -- Served-page markers.
+  local hs, hb = get(host, port, "/", opts)
+  if hs == 200 and hb and (hb:find("gradio-app", 1, true) or hb:find("__gradio_mode__", 1, true)) then
+    return { framework = "Gradio (ML app/demo front-end)", endpoint = "/", ui = true, models = {},
+             auth_required = false, access = "unknown", confidence = 65 }
+  end
+  return nil
+end
+
+-- Ray dashboard: the head-node UI/API of the Ray distributed-compute framework, widely used to
+-- serve and train ML models. The read-only /api/version returns
+-- {"result":true,"data":{"version":...,"rayVersion":...}}; an exposed dashboard allows job
+-- submission (remote code execution), so it is a high-value finding.
+local function detect_ray(host, port, opts)
+  local st, body = get(host, port, "/api/version", opts)
+  if st == 200 then
+    local doc = jparse(body)
+    -- The dashboard wraps payloads as {"result":bool,"data":{...}}; the data carries the
+    -- Ray version (rayVersion / ray_version) - an unambiguous Ray anchor.
+    local data = type(doc) == "table" and type(doc.data) == "table" and doc.data or doc
+    if type(data) == "table" and (data.rayVersion ~= nil or data.ray_version ~= nil
+        or data.ray_commit ~= nil or data.sessionName ~= nil) then
+      return { framework = "Ray dashboard (distributed compute)", endpoint = "/api/version",
+               gateway = true, version = data.rayVersion or data.ray_version,
+               models = {}, auth_required = false, confidence = 85 }
+    end
+  end
+  return nil
+end
+
+-- ChromaDB: an AI-native vector database. The read-only heartbeat returns
+-- {"nanosecond heartbeat": <int>} on both the v1 and v2 API roots; the v2 version endpoint
+-- adds the server version. An unauthenticated instance exposes stored embeddings/collections.
+local function detect_chromadb(host, port, opts)
+  for _, hb_path in ipairs({ "/api/v2/heartbeat", "/api/v1/heartbeat" }) do
+    local st, body = get(host, port, hb_path, opts)
+    if st == 200 and body and body:find("nanosecond heartbeat", 1, true) then
+      local r = { framework = "ChromaDB (vector database)", endpoint = hb_path, vectordb = true,
+                  models = {}, auth_required = false, confidence = 88 }
+      -- The version endpoint differs across the v1/v2 APIs; try both, read-only.
+      for _, vp in ipairs({ "/api/v2/version", "/api/v1/version" }) do
+        local vs, vb = get(host, port, vp, opts)
+        if vs == 200 and vb and vb ~= "" then
+          r.version = (vb:gsub('^%s*"', ""):gsub('"%s*$', ""))  -- the body is a bare quoted string
+          break
+        end
+      end
+      return r
+    elseif st == 401 or st == 403 then
+      return { framework = "ChromaDB (vector database)", endpoint = hb_path, vectordb = true,
+               auth_required = true, confidence = 88 }
+    end
+  end
+  return nil
+end
+
+-- Qdrant: a vector database. The REST root returns
+-- {"title":"qdrant - vector search engine","version":"1.x","commit":...}; /collections lists
+-- the stored collections ({"result":{"collections":[...]},"status":"ok"}) on an open instance.
+local function detect_qdrant(host, port, opts)
+  local st, body = get(host, port, "/", opts)
+  if st == 200 and body then
+    local doc = jparse(body)
+    if doc and type(doc.title) == "string" and doc.title:find("qdrant", 1, true) then
+      local r = { framework = "Qdrant (vector database)", endpoint = "/", vectordb = true,
+                  version = doc.version, models = {}, auth_required = false, leaks = {}, confidence = 88 }
+      -- /collections lists stored collections on an unauthenticated instance.
+      local cs, cb = get(host, port, "/collections", opts)
+      local cd = jparse(cb)
+      if cs == 200 and cd and type(cd.result) == "table" and type(cd.result.collections) == "table" then
+        local n = #cd.result.collections
+        if n > 0 then r.leaks[#r.leaks + 1] = "collection inventory exposed via /collections (" .. n .. " collection(s))" end
+      end
+      return r
+    end
+  elseif st == 401 or st == 403 then
+    return { framework = "Qdrant (vector database)", endpoint = "/", vectordb = true,
+             auth_required = true, confidence = 80 }
+  end
+  return nil
+end
+
+-- Weaviate: a vector database. The read-only /v1/meta returns
+-- {"hostname":...,"version":...,"modules":{...}} - a precise, version-bearing JSON anchor
+-- (stronger than the "Weaviate Console" HTML title, which only the optional UI serves).
+local function detect_weaviate(host, port, opts)
+  local st, body = get(host, port, "/v1/meta", opts)
+  if st == 200 then
+    local doc = jparse(body)
+    if doc and doc.version ~= nil and (doc.hostname ~= nil or doc.modules ~= nil) then
+      return { framework = "Weaviate (vector database)", endpoint = "/v1/meta", vectordb = true,
+               version = doc.version, models = {}, auth_required = false, confidence = 88 }
+    end
+  elseif st == 401 or st == 403 then
+    return { framework = "Weaviate (vector database)", endpoint = "/v1/meta", vectordb = true,
+             auth_required = true, confidence = 80 }
+  end
+  -- Weaviate Console UI fallback.
+  local hs, hb = get(host, port, "/", opts)
+  if hs == 200 and hb and hb:find("<title>Weaviate Console", 1, true)
+      and hb:find("webpackJsonpweaviate-console", 1, true) then
+    return { framework = "Weaviate Console (vector database UI)", endpoint = "/", vectordb = true,
+             models = {}, auth_required = false, confidence = 80 }
+  end
+  return nil
+end
+
+-- Milvus: a vector database. The Milvus web UI / Attu console title carries "Milvus"; the
+-- REST health probe at /healthz returns "OK". Title match requires the literal "<title>Milvus".
+local function detect_milvus(host, port, opts)
+  local hs, hb = get(host, port, "/", opts)
+  if hs == 200 and hb and (hb:find("<title>Milvus", 1, true) or hb:find("<title>Attu", 1, true)) then
+    return { framework = "Milvus (vector database)", endpoint = "/", vectordb = true, models = {},
+             auth_required = false, confidence = 80 }
+  end
+  return nil
+end
+
+-- Marqo: a tensor/vector search engine. The read-only root returns {"message":"Welcome to
+-- Marqo","version":...}; /health gives status. Distinct from the others by the welcome message.
+local function detect_marqo(host, port, opts)
+  local st, body = get(host, port, "/", opts)
+  if st == 200 and body then
+    local doc = jparse(body)
+    if doc and type(doc.message) == "string" and doc.message:find("Welcome to Marqo", 1, true) then
+      return { framework = "Marqo (vector search engine)", endpoint = "/", vectordb = true,
+               version = doc.version, models = {}, auth_required = false, confidence = 85 }
+    end
+    if body:find("Welcome to Marqo", 1, true) then
+      return { framework = "Marqo (vector search engine)", endpoint = "/", vectordb = true,
+               models = {}, auth_required = false, confidence = 80 }
+    end
+  end
+  return nil
+end
+
+-- Jan: a local OpenAI-compatible inference server (the Jan desktop app's API server, "Jan
+-- Nitro"/Cortex backend). Its /v1/models is the standard list shape, so it is disambiguated
+-- from a plain OpenAI server by the Jan-specific /healthz probe paired with an OpenAI-shaped
+-- model list. Only reported when both are present, to avoid claiming any FastAPI /healthz.
+local function detect_jan(host, port, opts)
+  local hs = get(host, port, "/healthz", opts)
+  if hs ~= 200 then return nil end
+  -- /healthz returns a small JSON/text health body; require an OpenAI-compatible /v1/models too.
+  local ms, mb = get(host, port, "/v1/models", opts)
+  if ms ~= 200 then return nil end
+  local md = jparse(mb)
+  if not (md and md.object == "list" and type(md.data) == "table") then return nil end
+  local r = { framework = "Jan (OpenAI-compatible)", endpoint = "/healthz", models = {},
+              auth_required = false, confidence = 70 }
+  for _, m in ipairs(md.data) do r.models[#r.models + 1] = m.id or "?" end
+  return r
 end
 
 -- LLM web UIs / gateways. These are front-ends that proxy to a backend inference server
@@ -346,14 +739,48 @@ local function detect_webui(host, port, opts)
       end
     end
   end
-  -- Flowise (LangChain flow builder / gateway): GET /api/v1/version -> {"version":...}.
-  -- Its chatflow prediction endpoints are often publicly callable, so flag it as a gateway.
+  -- LobeChat /welcome page (when the manifest is renamed/absent): the literal welcome banner.
+  do
+    local ws, wb = get(host, port, "/welcome", opts)
+    if ws == 200 and wb and wb:find("Welcome to LobeChat", 1, true) then
+      return { framework = "LobeChat", endpoint = "/welcome", ui = true, models = {},
+               auth_required = false, access = "unknown", confidence = 80 }
+    end
+  end
+  -- Langflow and Flowise BOTH serve GET /api/v1/version, so the body must be inspected to tell
+  -- them apart. Langflow's payload carries "package":"Langflow" (and the served page title);
+  -- Flowise's is a bare {"version":...}. Langflow is checked first so it is never mislabeled.
   local fs, fb = get(host, port, "/api/v1/version", opts)
   if fs == 200 then
     local fd = jparse(fb)
+    -- Langflow: {"version":...,"package":"Langflow",...}.
+    if fd and type(fd.package) == "string" and fd.package:find("Langflow", 1, true) then
+      return { framework = "Langflow (LLM flow builder)", endpoint = "/api/v1/version", ui = true,
+               gateway = true, version = fd.version, models = {}, auth_required = false,
+               access = "unknown", confidence = 86 }
+    end
+    -- Flowise (LangChain flow builder / gateway): a bare {"version":...}. Its chatflow
+    -- prediction endpoints are often publicly callable, so flag it as a gateway.
     if fd and fd.version then
       return { framework = "Flowise", endpoint = "/api/v1/version", ui = true, gateway = true,
                version = fd.version, models = {}, auth_required = false, access = "unknown", confidence = 82 }
+    end
+  end
+  -- Langflow served page (older builds, or when /api/v1/version is gated): the SPA title.
+  do
+    local ls, lb = get(host, port, "/", opts)
+    if ls == 200 and lb and lb:find("<title>Langflow</title>", 1, true) then
+      return { framework = "Langflow (LLM flow builder)", endpoint = "/", ui = true, gateway = true,
+               models = {}, auth_required = false, access = "unknown", confidence = 80 }
+    end
+  end
+  -- LoLLMs WebUI (ParisNeo): a local-LLM chat/agent UI. The served page carries the literal
+  -- "LoLLMS WebUI - Welcome" banner; its API endpoints are typically unauthenticated.
+  do
+    local ls, lb = get(host, port, "/", opts)
+    if ls == 200 and lb and lb:find("LoLLMS WebUI - Welcome", 1, true) then
+      return { framework = "LoLLMs WebUI", endpoint = "/", ui = true, models = {},
+               auth_required = false, access = "unknown", confidence = 82 }
     end
   end
   -- AnythingLLM: GET /api/ping -> {"online":true}; the served SPA confirms it.
@@ -370,7 +797,18 @@ end
 
 local DETECTORS = {
   detect_ollama, detect_openai, detect_tgi, detect_llamacpp, detect_koboldcpp,
-  detect_triton, detect_torchserve, detect_webui,
+  detect_triton, detect_torchserve,
+  -- inference / serving frameworks added beyond the original OpenAI-family set
+  detect_xinference, detect_localai, detect_litellm, detect_bentoml, detect_jan,
+  -- image-generation / ML-app servers
+  detect_comfyui, detect_sdwebui, detect_gradio, detect_ray,
+  -- vector databases
+  detect_chromadb, detect_qdrant, detect_weaviate, detect_milvus, detect_marqo,
+  -- web UIs / gateways (Open WebUI, LibreChat, NextChat, LobeChat, Flowise, AnythingLLM,
+  -- Langflow, LoLLMs)
+  detect_webui,
+  -- plugin / integration descriptors
+  detect_openai_plugin,
 }
 
 --------------------------------------------------------------------------------
@@ -540,8 +978,10 @@ function detect(host, port, opts)
 
   -- Active "hello" probe (on by default): confirm inference on an identified endpoint, or
   -- actively detect a list-less API (Anthropic) / otherwise-unidentified inference endpoint.
-  -- Never probe a web UI / gateway: it is a front-end, not an inference endpoint.
-  if opts.probe and not (result and result.ui) then
+  -- Never probe a web UI, a gateway/dashboard, or a vector database: none of these is a direct
+  -- inference endpoint, so a chat "hello" is both meaningless and not read-only for them.
+  local non_inference = result and (result.ui or result.vectordb or result.gateway)
+  if opts.probe and not non_inference then
     if result and not result.auth_required then
       -- Confirm inference with a hello only when it adds information. Skip it for a framework
       -- that already lists its models: the list already proves a live inference endpoint, and

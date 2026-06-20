@@ -83,7 +83,16 @@ action = function(host, port)
 
   local out = stdnse.output_table()
   out.framework = r.framework
-  if r.ui then out.kind = "web UI (fronts a backend inference server)" end
+  if r.ui then
+    out.kind = "web UI (fronts a backend inference server)"
+  elseif r.vectordb then
+    out.kind = "vector database (stores embeddings / collections)"
+  elseif r.plugin then
+    out.kind = "plugin manifest (describes a backend API for an LLM agent)"
+  elseif r.gateway then
+    out.kind = "gateway/dashboard (fronts backend compute or inference)"
+  end
+  if r.plugin_name then out.plugin = r.plugin_name end
   if r.version then out.version = r.version end
   if r.server then out.server = r.server end
   out.endpoint = r.endpoint
@@ -140,6 +149,25 @@ action = function(host, port)
         "exposed LLM web UI (%s) fronting a backend inference server%s; verify whether unauthenticated use is permitted",
         r.framework, r.gateway and " (prediction endpoints may be publicly callable)" or "")
     end
+  elseif r.vectordb and not r.auth_required and not opts.credentialed then
+    -- A vector DB exposure is a DATA finding (stored embeddings / collections / metadata),
+    -- not a compute-abuse one; report it as such, and surface any leaked collection inventory.
+    out.SECURITY = string.format(
+      "unauthenticated vector database (%s) exposes stored embeddings/collections to anyone on the network",
+      r.framework)
+  elseif r.plugin and not r.auth_required and not opts.credentialed then
+    -- A plugin manifest is an information-disclosure finding: it advertises the backend API an
+    -- LLM agent drives (and its auth scheme), mapping further attack surface, but is not itself
+    -- a callable inference endpoint. (Checked before the generic gateway branch.)
+    out.SECURITY = string.format(
+      "exposed %s discloses the backend API and auth scheme of an LLM plugin/integration; maps additional attack surface",
+      r.framework)
+  elseif r.gateway and not r.auth_required and not opts.credentialed then
+    -- A gateway/dashboard (LiteLLM proxy, Ray dashboard) fronts backend compute: an open one
+    -- can proxy real inference and, for orchestration dashboards, submit jobs (remote code exec).
+    out.SECURITY = string.format(
+      "unauthenticated %s exposed; it fronts backend compute/inference and may allow proxied model use or job submission (remote code execution)",
+      r.framework)
   elseif not r.auth_required and not opts.credentialed then
     local n = (r.models and #r.models) or 0
     out.SECURITY = string.format(
@@ -148,7 +176,10 @@ action = function(host, port)
   end
 
   -- Feed -sV.
-  port.version.name = r.ui and "llm-ui" or "llm-api"
+  if r.ui then port.version.name = "llm-ui"
+  elseif r.vectordb then port.version.name = "vector-db"
+  elseif r.gateway then port.version.name = "llm-gateway"
+  else port.version.name = "llm-api" end
   port.version.product = r.framework
   if r.version then port.version.version = r.version end
   port.version.extrainfo = r.auth_required and "auth required" or "unauthenticated"
