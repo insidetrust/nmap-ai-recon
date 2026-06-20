@@ -4,19 +4,27 @@ License
 This project is dual-purpose: it is intended both as a standalone tool and as an
 upstream contribution to the Nmap Scripting Engine.
 
-NSE components (for upstream compatibility)
--------------------------------------------
-The following files are offered under the same terms as Nmap itself (the Nmap Public
-Source License, NPSL - see https://nmap.org/npsl/), so they can be contributed to and
-redistributed within the Nmap project:
+NSE components (offered for upstream contribution)
+--------------------------------------------------
+The following files are licensed under the same terms as Nmap itself - the Nmap Public
+Source License (NPSL), https://nmap.org/npsl/:
 
     scripts/mcp-info.nse
     scripts/mcp-enum.nse
     scripts/mcp.lua
     nmap-service-probes.mcp
 
-Each NSE file carries the standard header line:
-    "Same as Nmap--See https://nmap.org/book/man-legal.html"
+Each NSE file carries the standard in-file header:
+    license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+
+Contribution and relicensing grant
+----------------------------------
+Copyright in these files is held by Ben Williams / NCC Group. Consistent with the
+contribution terms in Nmap's HACKING document, they are offered to the Nmap Project
+(Nmap Software LLC) with an unlimited, non-exclusive, royalty-free right to use,
+reproduce, modify, distribute, sublicense, and relicense them - including under Nmap's
+separate commercial/OEM license - so they can be incorporated into the official Nmap
+distribution. The NPSL governs all other use and redistribution.
 
 Supporting material
 -------------------
