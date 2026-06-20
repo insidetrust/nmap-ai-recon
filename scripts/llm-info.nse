@@ -9,14 +9,14 @@ Detects and fingerprints LLM inference APIs exposed over HTTP(S).
 
 Probes a target for the common self-hosted and cloud inference frameworks by their
 read-only model-list and metadata endpoints: the OpenAI-compatible API (vLLM, LiteLLM,
-LocalAI, LM Studio, text-generation-webui, ...), Ollama, HuggingFace TGI, llama.cpp
+LocalAI, LM Studio, text-generation-webui, and similar), Ollama, HuggingFace TGI, llama.cpp
 server, Triton/KServe (v2), and TorchServe. On a match it reports the framework, version,
 model inventory, authentication posture, and notable information leaks (e.g. a llama.cpp
 system prompt exposed via /props). It augments service/version detection via -sV.
 
 By default the script also sends a single minimal "hello" completion request
 (max_tokens = 1) to confirm the endpoint actually serves inference and to detect formats
-with no model-list endpoint -- notably Anthropic's Messages API (/v1/messages). Pass
+with no model-list endpoint, notably Anthropic's Messages API (/v1/messages). Pass
 llm.probe=false for strictly read-only detection (model-list / metadata / health endpoints
 only, no inference request).
 
@@ -91,6 +91,7 @@ action = function(host, port)
   end
 
   if r.inference then out.inference = "confirmed (responded to a minimal hello)" end
+  if r.error_sig then out.error_sig = r.error_sig end
 
   if r.models and #r.models > 0 then
     local label = "models (" .. #r.models .. ")"

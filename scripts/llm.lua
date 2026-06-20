@@ -1,15 +1,16 @@
 ---
 -- Shared library for fingerprinting LLM inference APIs exposed over HTTP(S).
 --
--- Detects the common self-hosted / cloud inference frameworks by their read-only
+-- Detects the common self-hosted and cloud inference frameworks by their read-only
 -- model-list and metadata endpoints: the OpenAI-compatible API (vLLM, LiteLLM, LocalAI,
--- LM Studio, text-generation-webui, ...), Ollama, HuggingFace TGI, llama.cpp server,
--- Triton/KServe (v2), and TorchServe. Reports the framework, version, model inventory,
--- authentication posture, and notable information leaks.
+-- LM Studio, text-generation-webui, and similar), Ollama, HuggingFace TGI, llama.cpp
+-- server, Triton/KServe (v2), and TorchServe. Reports the framework, version, model
+-- inventory, authentication posture, and notable information leaks.
 --
--- All operations are READ-ONLY: only model-list / metadata / health endpoints are
--- requested. No inference endpoint (/v1/chat/completions, /api/generate, /generate, ...)
--- is ever called, so no model is run and no cost is incurred on the target.
+-- By default the library also sends a single minimal "hello" completion (max_tokens = 1)
+-- to confirm an endpoint serves inference and to detect formats with no model-list endpoint
+-- (notably the Anthropic Messages API). Set llm.probe=false to keep detection strictly
+-- read-only. Authorised testing only.
 --
 -- @author Ben Williams <ben.williams@nccgroup.com>
 -- @copyright Same as Nmap--See https://nmap.org/book/man-legal.html
@@ -232,7 +233,7 @@ local DETECTORS = {
 --------------------------------------------------------------------------------
 -- Active "hello" probe (on by default). Sends a single minimal completion request and
 -- looks for an inference-shaped response: it confirms the endpoint actually serves a model
--- (not just lists them) and, crucially, detects formats with NO list endpoint -- notably
+-- (not just lists them) and detects formats with no list endpoint, notably
 -- Anthropic's Messages API. Kept minimal (max_tokens = 1, prompt "hello").
 --------------------------------------------------------------------------------
 
@@ -332,8 +333,31 @@ local function enum_openai(host, port, opts)
   return found
 end
 
--- Probe a host:port for a known inference API. EVERY detector runs; the result is chosen by
--- signal specificity (the `confidence` each detector assigns), NOT by detector order -- so a
+-- Error-condition fingerprint: requesting a bogus model returns a model-not-found error
+-- WITHOUT running inference, and the body shape distinguishes frameworks/stacks:
+--   {"object":"error", "type":"NotFoundError"}      -> vLLM
+--   {"detail": ...}                                 -> FastAPI/Starlette-based server
+--   {"error":{"type":"invalid_request_error",...}}  -> canonical OpenAI format
+-- Returns { framework?, error_sig } or nil.
+local function refine_by_error(host, port, opts)
+  local body = gen({ model = "__nmap_probe_404__",
+                     messages = { { role = "user", content = "x" } }, max_tokens = 1 })
+  if not body then return nil end
+  local _, rb = post(host, port, "/v1/chat/completions", nil, body, opts)
+  local doc = jparse(rb)
+  if not doc then return nil end
+  if doc.object == "error" then
+    return { framework = "vLLM (OpenAI-compatible)", error_sig = "{object:error} type=" .. tostring(doc.type) }
+  elseif doc.detail ~= nil then
+    return { error_sig = "{detail} (FastAPI/Starlette)" }
+  elseif type(doc.error) == "table" then
+    return { error_sig = "{error} " .. tostring(doc.error.code or doc.error.type) }
+  end
+  return nil
+end
+
+-- Probe a host:port for a known inference API. Every detector runs; the result is chosen by
+-- signal specificity (the `confidence` each detector assigns), not by detector order, so a
 -- server matching several signatures (e.g. Ollama, which also serves /v1/models) is reported
 -- by its most specific match. A positive (HTTP 200) identification always beats an auth-gated
 -- hint (a framework endpoint returning 401/403). Reordering DETECTORS cannot change the result.
@@ -364,6 +388,17 @@ function detect(host, port, opts)
         conf = hello_openai(host, port, result.models and result.models[1], opts)
       end
       if conf then result.inference = conf end
+      -- Error-condition fingerprint: refine a generic OpenAI match and record an error sig.
+      if result.endpoint == "/v1/models" or result.endpoint == "/v1/chat/completions" then
+        local ref = refine_by_error(host, port, opts)
+        if ref then
+          if ref.framework and result.framework == "OpenAI-compatible API" then
+            result.framework = ref.framework
+            result.confidence = 60
+          end
+          if ref.error_sig then result.error_sig = ref.error_sig end
+        end
+      end
     elseif not result then
       result = probe_anthropic(host, port, opts)
       if not result and hello_openai(host, port, nil, opts) then

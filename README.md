@@ -176,11 +176,15 @@ parameters are marked `*`.
 
 Either install the lib or use the `--datadir` harness above (omitted below for brevity).
 
-**Regression matrix** (fastest check) drives the mock across protocol versions, all three
-transports, and both auth states, asserting the expected output (23 checks):
+**Regression matrices** (fastest check) drive the mocks across every configuration and
+assert the expected output. `run_matrix.sh` covers MCP (protocol versions, all three
+transports, both auth states; 23 checks); `run_llm_matrix.sh` covers the inference
+detector (every framework, order-independent identification, the hello probe, credentials,
+model listing + enumeration, and error-condition fingerprinting; 26 checks):
 
 ```bash
-test/run_matrix.sh        # exits non-zero on any failure
+test/run_matrix.sh        # MCP;       exits non-zero on any failure
+test/run_llm_matrix.sh    # inference; exits non-zero on any failure
 ```
 
 **Mock server** (dependency-free) for ad-hoc probing; `MCP_PROTOCOL` overrides the

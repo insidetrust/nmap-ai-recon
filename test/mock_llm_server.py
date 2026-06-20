@@ -34,6 +34,7 @@ ROUTES = {
     },
     "openai": {"/v1/models": OPENAI_MODELS},
     "vllm": {"/v1/models": OPENAI_MODELS, "/version": {"version": "0.6.2"}},
+    "vllm_stealth": {"/v1/models": OPENAI_MODELS},   # no /version: only the error shape reveals vLLM
     "tgi": {"/info": {"model_id": "meta-llama/Meta-Llama-3-8B-Instruct",
                       "model_dtype": "torch.float16", "version": "2.0.4"}},
     "llamacpp": {
@@ -120,9 +121,20 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"type": "error",
                                     "error": {"type": "not_found_error", "message": "model not found"}})
 
-        # OpenAI-compatible chat completion (the hello probe confirms inference here).
+        # OpenAI-compatible chat completion. A real model confirms inference; the bogus probe
+        # model elicits a framework-specific model-not-found error (no inference is run).
         if path == "/v1/chat/completions":
-            if MODE in ("openai", "vllm", "llamacpp"):
+            try:
+                model = json.loads(raw or b"{}").get("model", "")
+            except Exception:
+                model = ""
+            if MODE in ("openai", "vllm", "vllm_stealth", "llamacpp"):
+                if model == "__nmap_probe_404__":
+                    if MODE in ("vllm", "vllm_stealth"):
+                        return self._send(404, {"object": "error", "type": "NotFoundError", "code": 404,
+                                                "message": "The model `__nmap_probe_404__` does not exist."})
+                    return self._send(404, {"error": {"message": "The model does not exist",
+                                                      "type": "invalid_request_error", "code": "model_not_found"}})
                 return self._send(200, {"object": "chat.completion",
                                         "choices": [{"message": {"role": "assistant", "content": "Hi"}}]})
             if MODE == "authed":

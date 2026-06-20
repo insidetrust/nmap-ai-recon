@@ -107,6 +107,5 @@ Both are routinely deployed on dev ports bound to `0.0.0.0` with no authenticati
 | Item | State |
 |---|---|
 | MCP: `mcp-info`, `mcp-enum`, `mcp.lua`, mock, matrix | Done; field-tested vs FastMCP, server-everything, and live public servers |
-| Inference: `llm-info`, `llm.lua`, `mock_llm_server.py` | Done; order-independent + credentialed; active "hello" probe (on by default), Anthropic detection, and model enumeration; validated against the mock for all frameworks |
-| Inference: error-condition fingerprinting (framework/version from error-body shape) | Planned |
+| Inference: `llm-info`, `llm.lua`, `mock_llm_server.py`, `run_llm_matrix.sh` | Done; order-independent + credentialed; active "hello" probe (on by default), Anthropic detection, model enumeration, and error-condition fingerprinting; 26-check regression matrix passes |
 | Upstream nmap PR + standalone repo | Repo public (`insidetrust/nmap-ai-recon`); MCP PR branch staged; submission on hold |
