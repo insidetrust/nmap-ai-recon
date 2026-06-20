@@ -1,7 +1,7 @@
 # PRD: Nmap NSE scripts for AI infrastructure recon
 
-**Status:** MCP detection/enumeration and LLM inference-API detection shipped; active
-inference probing (`llm-probe`) and upstream submission pending.
+**Status:** MCP detection/enumeration and LLM inference-API detection shipped; combined
+upstream PR submitted to nmap/nmap (#3394), dev@nmap.org email pending.
 **Author:** Ben Williams (NCC Group)
 **Date:** 2026-06-08 (updated 2026-06-20)
 
@@ -127,4 +127,4 @@ Both are routinely deployed on dev ports bound to `0.0.0.0` with no authenticati
 |---|---|
 | MCP: `mcp-info`, `mcp-enum`, `mcp.lua`, mock, matrix | Done; field-tested vs FastMCP, server-everything, and live public servers |
 | Inference: `llm-info`, `llm.lua`, `mock_llm_server.py`, `run_llm_matrix.sh` | Done; order-independent + credentialed; active "hello" probe (on by default), Anthropic detection, model enumeration, error-condition fingerprinting, Prometheus `/metrics` leak, and AI web UI / gateway detection with access posture; field-tested vs real Ollama and KoboldCpp; 57-check regression matrix passes |
-| Upstream nmap PR + standalone repo | Repo public (`insidetrust/nmap-ai-recon`); MCP PR branch staged; submission on hold |
+| Upstream nmap PR + standalone repo | Repo public (`insidetrust/nmap-ai-recon`); combined PR (MCP + inference) submitted to nmap/nmap (#3394); dev@nmap.org email pending |
