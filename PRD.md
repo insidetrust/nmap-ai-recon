@@ -84,7 +84,7 @@ Both are routinely deployed on dev ports bound to `0.0.0.0` with no authenticati
 ### 3.3 Shared / test
 - `test/mock_mcp_server.py`, `test/mock_llm_server.py` - dependency-free mocks
   (one config/framework per process via env var).
-- `test/run_matrix.sh` (MCP, 23 checks) and `test/run_llm_matrix.sh` (inference, 35 checks) -
+- `test/run_matrix.sh` (MCP, 23 checks) and `test/run_llm_matrix.sh` (inference, 38 checks) -
   local regression matrices asserting expected output.
 
 ## 4. On the wire

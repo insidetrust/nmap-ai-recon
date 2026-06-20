@@ -71,12 +71,18 @@ Real servers forced hardening, all automatic: a **raw-socket transport** (nmap's
 **TLS auto-fallback**, a **port-qualified Host header** (servers return `421` otherwise),
 and valid `initialize` params (strict servers reject empty params with `-32602`).
 
-LLM inference (`llm-info`): field-tested against a real **Ollama 0.30.7** instance -
-detection, version, and the full model inventory, read-only in ~0.1s. Field-testing drove
-the conditional hello probe (skip the redundant inference request when a framework already
-lists its models, which on Ollama forces a slow model load). The bundled
-`nmap-service-probes.llm` fragment also lets bare `-sV` flag the instance as
-`ollama  Ollama (LLM inference API)` without the script.
+LLM inference (`llm-info`): field-tested against real servers, not just the mock:
+- **Ollama 0.30.7** - detection, version, and the full model inventory, read-only in ~0.1s.
+  Field-testing drove the conditional hello probe (skip the redundant inference request when
+  a framework already lists its models, which on Ollama forces a slow model load). The
+  bundled `nmap-service-probes.llm` fragment also lets bare `-sV` flag the instance as
+  `ollama  Ollama (LLM inference API)` without the script.
+- **KoboldCpp 1.115.2** - a real KoboldCpp simultaneously emulates the Ollama (`/api/tags`),
+  OpenAI (`/v1/models`) and llama.cpp (`/props`) APIs, so four detectors fire on it at once.
+  This caught a misidentification (the Ollama emulation, scored 90, outranked KoboldCpp): the
+  fix scores the unambiguous `/api/extra/version` banner above all emulated signals, so the
+  server is now reported as KoboldCpp with its real version (not the emulated Ollama `0.7.0`).
+  The matrix reproduces the multi-emulation collision to guard against regression.
 
 ## Usage
 
@@ -207,7 +213,7 @@ assert the expected output. `run_matrix.sh` covers MCP (protocol versions, all t
 transports, both auth states; 23 checks); `run_llm_matrix.sh` covers the inference
 detector (every framework, order-independent identification, the hello probe, credentials,
 model listing + enumeration, the Prometheus `/metrics` leak, and error-condition
-fingerprinting; 35 checks):
+fingerprinting; 38 checks):
 
 ```bash
 test/run_matrix.sh        # MCP;       exits non-zero on any failure

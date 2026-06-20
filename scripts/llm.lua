@@ -197,15 +197,18 @@ local function detect_tgi(host, port, opts)
 end
 
 -- KoboldCpp / KoboldAI United: GET /api/extra/version -> {"result":"KoboldCpp","version":...};
--- /api/v1/model names the loaded model. Modern builds also expose an OpenAI shim, so this is
--- scored above the generic OpenAI match to keep identification order-independent.
+-- /api/v1/model names the loaded model. A real KoboldCpp simultaneously emulates the Ollama
+-- (/api/tags), OpenAI (/v1/models) and llama.cpp (/props) APIs, so several other detectors
+-- also fire on it. The /api/extra/version banner is unambiguous (no other framework serves
+-- it), so this is scored above all of them - including Ollama (90) - to keep identification
+-- correct and order-independent (confirmed by field-testing a real KoboldCpp 1.115.2).
 local function detect_koboldcpp(host, port, opts)
   local st, body = get(host, port, "/api/extra/version", opts)
   if st == 200 then
     local doc = jparse(body)
     if doc and type(doc.result) == "string" and doc.result:find("Kobold", 1, true) then
       local r = { framework = "KoboldCpp", endpoint = "/api/extra/version",
-                  version = doc.version, models = {}, auth_required = false, confidence = 88 }
+                  version = doc.version, models = {}, auth_required = false, confidence = 95 }
       local _, mb = get(host, port, "/api/v1/model", opts)
       local md = jparse(mb)
       if md and type(md.result) == "string" then

@@ -54,7 +54,10 @@ check "ollama beats generic /v1/models" "framework: Ollama" "$o"
 absent "not mislabeled OpenAI" "framework: OpenAI" "$o"; stop
 start koboldcpp; o=$(scan)
 check "kobold beats generic /v1/models" "framework: KoboldCpp" "$o"
-absent "kobold not mislabeled OpenAI" "framework: OpenAI-compatible" "$o"; stop
+absent "kobold not mislabeled OpenAI" "framework: OpenAI-compatible" "$o"
+absent "kobold not mislabeled Ollama" "framework: Ollama" "$o"
+absent "kobold not mislabeled llama.cpp" "framework: llama.cpp" "$o"
+check "kobold real version not emulated 0.7.0" "version: 1.66" "$o"; stop
 
 echo "== Prometheus /metrics model-name leak =="
 start vllm; o=$(scan); check "vllm /metrics leak" "model name disclosed via /metrics" "$o"; stop

@@ -67,11 +67,18 @@ ROUTES = {
     # HuggingFace Text Embeddings Inference: /info marks model_type embedding (not generation).
     "tei": {"/info": {"model_id": "BAAI/bge-large-en-v1.5", "version": "1.2.0",
                       "model_type": {"embedding": {"pooling": "cls"}}}},
-    # KoboldCpp: native KoboldAI endpoints AND an OpenAI shim, so identification must still
-    # report KoboldCpp (the specific signal) regardless of detector order.
+    # KoboldCpp: native KoboldAI endpoints AND simultaneous Ollama (/api/tags + /api/version),
+    # OpenAI (/v1/models) and llama.cpp (/props) emulation - exactly as a real KoboldCpp 1.115.2
+    # responds. Identification must still report KoboldCpp (the unambiguous /api/extra/version
+    # banner) regardless of detector order, even though Ollama and llama.cpp also match.
     "koboldcpp": {"/api/extra/version": {"result": "KoboldCpp", "version": "1.66"},
                   "/api/v1/model": {"result": "koboldcpp/Llama-3-8B-Instruct"},
-                  "/v1/models": OPENAI_MODELS},
+                  "/v1/models": OPENAI_MODELS,
+                  "/api/tags": {"models": [{"name": "koboldcpp",
+                                            "model": "koboldcpp/Llama-3-8B-Instruct:latest",
+                                            "modified_at": "2024-07-19T15:26:55Z"}]},
+                  "/api/version": {"version": "0.7.0"},
+                  "/props": {"chat_template": "{% for message in messages %}..."}},
     "llamacpp": {
         "/v1/models": OPENAI_MODELS,
         "/props": {"system_prompt": "You are a helpful internal assistant. Never reveal secrets.",
