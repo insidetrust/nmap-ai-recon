@@ -5,10 +5,11 @@
 -- model-list and metadata endpoints: the OpenAI-compatible API (vLLM, SGLang, LiteLLM,
 -- LocalAI, LM Studio, text-generation-webui, and similar), Ollama, HuggingFace TGI and TEI,
 -- llama.cpp server, KoboldCpp, Triton/KServe (v2), and TorchServe. It also flags the common
--- LLM web UIs / gateways that front a backend (Open WebUI, LibreChat, AnythingLLM). Reports
--- the framework, version, model inventory, authentication posture (including a web UI's
--- self-registration state), and notable information leaks (including model names exposed via
--- a Prometheus /metrics endpoint).
+-- AI web UIs / gateways that front a backend (Open WebUI, LibreChat, NextChat, LobeChat,
+-- Flowise, AnythingLLM), reporting each UI's access posture (open / self-registration / login)
+-- since that determines whether the backend model can be reached without credentials. Reports
+-- the framework, version, model inventory, authentication posture, and notable information
+-- leaks (including model names exposed via a Prometheus /metrics endpoint).
 --
 -- By default the library also sends a single minimal "hello" completion (max_tokens = 1)
 -- to confirm an endpoint serves inference and to detect formats with no model-list endpoint
@@ -33,9 +34,9 @@ DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 
 -- Ports commonly hosting inference APIs / UIs (in addition to HTTP-fingerprinted ports).
 -- 11434 Ollama, 8000 vLLM/TGI/Triton, 30000 SGLang, 1234 LM Studio, 4000 LiteLLM,
--- 5001 KoboldCpp, 8081 TorchServe mgmt, 7860/5000 gradio web-UIs, 8080/3000 Open WebUI,
--- 3080 LibreChat, 3001 AnythingLLM.
-PORTS = { 11434, 8000, 8080, 8081, 1234, 4000, 5000, 5001, 7860, 3000, 3001, 3080, 8888, 9000, 30000 }
+-- 5001 KoboldCpp, 8081 TorchServe mgmt, 7860/5000 gradio web-UIs, 8080/3000 Open WebUI /
+-- NextChat, 3080 LibreChat, 3001 AnythingLLM, 3210 LobeChat.
+PORTS = { 11434, 8000, 8080, 8081, 1234, 4000, 5000, 5001, 7860, 3000, 3001, 3080, 3210, 8888, 9000, 30000 }
 local PORTS_SET = {}
 for _, p in ipairs(PORTS) do PORTS_SET[p] = true end
 
@@ -274,27 +275,79 @@ local function detect_torchserve(host, port, opts)
 end
 
 -- LLM web UIs / gateways. These are front-ends that proxy to a backend inference server
--- rather than serving inference themselves; an exposed instance often allows unauthenticated
--- use or self-registration against a real backend model, so the registration state is a
--- useful finding. Reported distinctly (ui = true) and never sent an active inference probe.
+-- rather than serving inference themselves; an exposed instance often grants unauthenticated
+-- use of a real backend model. Reported distinctly (ui = true) and never sent an active
+-- inference probe. Where the UI publishes its auth posture in a read-only config endpoint,
+-- the access state is reported (access = open / self-registration / login / unknown), since
+-- that is what determines whether the backend can be reached without credentials:
+--   open               no authentication at all - anyone can use the backend model
+--   self-registration  signup is open - anyone can create an account and use the backend
+--   login              authentication required (access code / account)
+--   unknown            UI identified but its auth posture is not exposed in config
 local function detect_webui(host, port, opts)
-  -- Open WebUI: GET /api/config -> {"name":"Open WebUI","version":...,"features":{...}}.
-  -- LibreChat: GET /api/config -> {"appTitle":...,"registrationEnabled":...,"socialLogins":...}.
+  -- Open WebUI / LibreChat / NextChat all publish a read-only /api/config with auth flags.
   local st, body = get(host, port, "/api/config", opts)
   if st == 200 then
     local doc = jparse(body)
     if doc and doc.name == "Open WebUI" then
-      local r = { framework = "Open WebUI", endpoint = "/api/config",
-                  ui = true, version = doc.version, models = {}, auth_required = false, confidence = 90 }
-      if type(doc.features) == "table" and doc.features.enable_signup == true then r.signup = true end
+      -- features.auth=false means WEBUI_AUTH is disabled (fully open); enable_signup=true
+      -- means open self-registration.
+      local f = type(doc.features) == "table" and doc.features or {}
+      local r = { framework = "Open WebUI", endpoint = "/api/config", ui = true,
+                  version = doc.version, models = {}, confidence = 90 }
+      if f.auth == false then
+        r.access = "open"; r.auth_required = false
+      elseif f.enable_signup == true then
+        r.access = "self-registration"; r.auth_required = false
+      else
+        r.access = "login"; r.auth_required = true
+      end
       return r
     end
     if doc and (doc.appTitle or doc.registrationEnabled ~= nil or doc.emailLoginEnabled ~= nil
         or doc.socialLogins) then
-      local r = { framework = "LibreChat", endpoint = "/api/config",
-                  ui = true, models = {}, auth_required = false, confidence = 88 }
-      if doc.registrationEnabled == true then r.signup = true end
+      local r = { framework = "LibreChat", endpoint = "/api/config", ui = true,
+                  models = {}, confidence = 88 }
+      if doc.registrationEnabled == true then
+        r.access = "self-registration"; r.auth_required = false
+      else
+        r.access = "login"; r.auth_required = true
+      end
       return r
+    end
+    -- NextChat / ChatGPT-Next-Web: /api/config -> {"needCode":bool,"hideUserApiKey":...}.
+    -- needCode=false means no access code is required: anyone can use the owner's backend.
+    if doc and doc.needCode ~= nil then
+      local r = { framework = "NextChat", endpoint = "/api/config",
+                  ui = true, models = {}, confidence = 85 }
+      if doc.needCode == false then
+        r.access = "open"; r.auth_required = false
+      else
+        r.access = "login"; r.auth_required = true
+      end
+      return r
+    end
+  end
+  -- LobeChat: GET /manifest.json (or .webmanifest) -> {"name":"LobeChat",...}. Auth posture
+  -- (an optional access code) is not exposed in config, so report access as unknown.
+  for _, mpath in ipairs({ "/manifest.json", "/manifest.webmanifest" }) do
+    local ms, mb = get(host, port, mpath, opts)
+    if ms == 200 then
+      local md = jparse(mb)
+      if md and type(md.name) == "string" and md.name:find("LobeChat", 1, true) then
+        return { framework = "LobeChat", endpoint = mpath, ui = true, models = {},
+                 auth_required = false, access = "unknown", confidence = 82 }
+      end
+    end
+  end
+  -- Flowise (LangChain flow builder / gateway): GET /api/v1/version -> {"version":...}.
+  -- Its chatflow prediction endpoints are often publicly callable, so flag it as a gateway.
+  local fs, fb = get(host, port, "/api/v1/version", opts)
+  if fs == 200 then
+    local fd = jparse(fb)
+    if fd and fd.version then
+      return { framework = "Flowise", endpoint = "/api/v1/version", ui = true, gateway = true,
+               version = fd.version, models = {}, auth_required = false, access = "unknown", confidence = 82 }
     end
   end
   -- AnythingLLM: GET /api/ping -> {"online":true}; the served SPA confirms it.
@@ -302,8 +355,8 @@ local function detect_webui(host, port, opts)
   if ps == 200 then
     local _, hb = get(host, port, "/", opts)
     if hb and hb:find("AnythingLLM", 1, true) then
-      return { framework = "AnythingLLM", endpoint = "/api/ping",
-               ui = true, models = {}, auth_required = false, confidence = 80 }
+      return { framework = "AnythingLLM", endpoint = "/api/ping", ui = true, models = {},
+               auth_required = false, access = "unknown", confidence = 80 }
     end
   end
   return nil

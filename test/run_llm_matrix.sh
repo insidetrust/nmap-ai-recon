@@ -63,15 +63,29 @@ echo "== Prometheus /metrics model-name leak =="
 start vllm; o=$(scan); check "vllm /metrics leak" "model name disclosed via /metrics" "$o"; stop
 start sglang; o=$(scan); check "sglang /metrics leak" "model name disclosed via /metrics" "$o"; stop
 
-echo "== LLM web UIs / gateways (reported distinctly, no active probe) =="
+echo "== AI web UIs / gateways (access posture; no active probe) =="
 start openwebui; o=$(scan)
 check "open webui" "framework: Open WebUI" "$o"
-check "openwebui self-registration" "self_registration: enabled" "$o"
-check "openwebui ui security wording" "web UI .*fronting a backend" "$o"
+check "openwebui self-registration access" "access: self-registration enabled" "$o"
+check "openwebui self-reg security" "allows self-registration for unauthenticated access" "$o"
 absent "ui gets no inference hello" "inference: confirmed" "$o"; stop
+start openwebui_open; o=$(scan)
+check "openwebui auth-disabled detected" "framework: Open WebUI" "$o"
+check "openwebui open access" "access: open" "$o"
+check "openwebui open security" "grants open access to a backend" "$o"; stop
+start nextchat; o=$(scan)
+check "nextchat" "framework: NextChat" "$o"
+check "nextchat open access (needCode false)" "access: open" "$o"
+check "nextchat open security" "grants open access to a backend" "$o"; stop
 start librechat; o=$(scan)
 check "librechat" "framework: LibreChat" "$o"
-check "librechat self-registration" "self_registration: enabled" "$o"; stop
+check "librechat self-registration access" "access: self-registration enabled" "$o"; stop
+start lobechat; o=$(scan)
+check "lobechat" "framework: LobeChat" "$o"
+check "lobechat access unknown" "access: unknown" "$o"; stop
+start flowise; o=$(scan)
+check "flowise gateway" "framework: Flowise" "$o"
+check "flowise prediction-endpoint note" "prediction endpoints may be publicly callable" "$o"; stop
 start anythingllm; o=$(scan); check "anythingllm" "framework: AnythingLLM" "$o"; stop
 
 echo "== Active hello probe (on by default) =="

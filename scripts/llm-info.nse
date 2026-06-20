@@ -11,11 +11,12 @@ Probes a target for the common self-hosted and cloud inference frameworks by the
 read-only model-list and metadata endpoints: the OpenAI-compatible API (vLLM, SGLang,
 LiteLLM, LocalAI, LM Studio, text-generation-webui, and similar), Ollama, HuggingFace TGI
 and TEI, llama.cpp server, KoboldCpp, Triton/KServe (v2), and TorchServe. It also flags the
-common LLM web UIs / gateways that front a backend (Open WebUI, LibreChat, AnythingLLM). On a
-match it reports the framework, version, model inventory, authentication posture (including a
-web UI's self-registration state), and notable information leaks (e.g. a llama.cpp system
-prompt exposed via /props, or a served model name exposed via a Prometheus /metrics
-endpoint). It augments service/version detection via -sV.
+common AI web UIs / gateways that front a backend (Open WebUI, LibreChat, NextChat, LobeChat,
+Flowise, AnythingLLM), reporting each UI's access posture (open / self-registration / login),
+which determines whether the backend model can be used without credentials. On a match it
+reports the framework, version, model inventory, authentication posture, and notable
+information leaks (e.g. a llama.cpp system prompt exposed via /props, or a served model name
+exposed via a Prometheus /metrics endpoint). It augments service/version detection via -sV.
 
 By default the script also sends a single minimal "hello" completion request
 (max_tokens = 1) to confirm the endpoint actually serves inference and to detect formats
@@ -87,7 +88,17 @@ action = function(host, port)
   if r.server then out.server = r.server end
   out.endpoint = r.endpoint
 
-  if r.auth_required then
+  if r.ui then
+    -- For a web UI the access posture (whether the backend can be used without credentials)
+    -- is the relevant state, not a key/token challenge.
+    local A = {
+      open = "open (no authentication required)",
+      ["self-registration"] = "self-registration enabled (anyone can sign up)",
+      login = "login required",
+      unknown = "unknown (not exposed in config)",
+    }
+    out.access = A[r.access] or r.access or "unknown"
+  elseif r.auth_required then
     out.auth = opts.credentialed and "REQUIRED (supplied credential rejected)"
       or "REQUIRED (key/credentials)"
   elseif opts.credentialed then
@@ -98,7 +109,6 @@ action = function(host, port)
 
   if r.inference then out.inference = "confirmed (responded to a minimal hello)" end
   if r.error_sig then out.error_sig = r.error_sig end
-  if r.signup then out.self_registration = "enabled" end
 
   if r.models and #r.models > 0 then
     local label = "models (" .. #r.models .. ")"
@@ -109,17 +119,27 @@ action = function(host, port)
     out.leaks = r.leaks
   end
 
-  if not r.auth_required and not opts.credentialed then
-    if r.ui then
+  if r.ui then
+    -- The UI finding is driven by the access posture: open and self-registration both grant
+    -- unauthenticated use of the backend model; login-gated UIs are reported without a finding.
+    if r.access == "open" then
       out.SECURITY = string.format(
-        "unauthenticated LLM web UI (%s) fronting a backend inference server%s",
-        r.framework, r.signup and "; self-registration enabled" or "")
-    else
-      local n = (r.models and #r.models) or 0
+        "unauthenticated LLM web UI (%s) grants open access to a backend inference server%s",
+        r.framework, r.gateway and "; prediction endpoints may be publicly callable" or "")
+    elseif r.access == "self-registration" then
       out.SECURITY = string.format(
-        "unauthenticated inference API (%s) exposes %d model(s); open to compute/cost abuse and model disclosure",
-        r.framework, n)
+        "LLM web UI (%s) allows self-registration for unauthenticated access to a backend inference server",
+        r.framework)
+    elseif r.access == "unknown" then
+      out.SECURITY = string.format(
+        "exposed LLM web UI (%s) fronting a backend inference server%s; verify whether unauthenticated use is permitted",
+        r.framework, r.gateway and " (prediction endpoints may be publicly callable)" or "")
     end
+  elseif not r.auth_required and not opts.credentialed then
+    local n = (r.models and #r.models) or 0
+    out.SECURITY = string.format(
+      "unauthenticated inference API (%s) exposes %d model(s); open to compute/cost abuse and model disclosure",
+      r.framework, n)
   end
 
   -- Feed -sV.

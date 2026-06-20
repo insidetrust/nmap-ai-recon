@@ -78,17 +78,19 @@ Both are routinely deployed on dev ports bound to `0.0.0.0` with no authenticati
   shapes (`{object:error}` vLLM, `{detail}` FastAPI/Starlette, `{error: model_not_found}`
   canonical OpenAI), which refines a generic OpenAI match. Credentials via `llm.token`
   (Bearer) / `llm.header` (e.g. `x-api-key`, session cookie) test authenticated APIs. It also
-  flags the common **LLM web UIs / gateways** that front a backend (Open WebUI, LibreChat,
-  AnythingLLM) - reported distinctly as a UI (never sent an active inference probe) with the
-  **self-registration** state, since an exposed UI often allows unauthenticated or
-  self-signup use of a real backend model.
+  flags the common **AI web UIs / gateways** that front a backend (Open WebUI, LibreChat,
+  NextChat, LobeChat, Flowise, AnythingLLM) - reported distinctly as a UI (never sent an active
+  inference probe) with each UI's **access posture** read from its config (open /
+  self-registration / login / unknown). Open and self-registration both grant unauthenticated
+  use of the backend model, so they raise a security finding; login-gated UIs are reported
+  without one. This is the UI equivalent of the unauthenticated-inference finding for APIs.
 - **`llm.lua`** - shared detection + probe library (detectors, auth, active hello probe,
   model enumeration).
 
 ### 3.3 Shared / test
 - `test/mock_mcp_server.py`, `test/mock_llm_server.py` - dependency-free mocks
   (one config/framework per process via env var).
-- `test/run_matrix.sh` (MCP, 23 checks) and `test/run_llm_matrix.sh` (inference, 45 checks) -
+- `test/run_matrix.sh` (MCP, 23 checks) and `test/run_llm_matrix.sh` (inference, 55 checks) -
   local regression matrices asserting expected output.
 
 ## 4. On the wire
@@ -106,6 +108,10 @@ Both are routinely deployed on dev ports bound to `0.0.0.0` with no authenticati
   `200` vs `401/403`; `Server` header as a secondary fingerprint. The active
   probe adds `POST /v1/chat/completions` (a minimal hello, or a bogus model for the
   error-shape fingerprint) and `POST /v1/messages` (Anthropic, which has no list endpoint).
+- **Web UIs**: read-only config endpoints that also carry the auth posture - `GET /api/config`
+  (Open WebUI `features.auth`/`enable_signup`, LibreChat `registrationEnabled`, NextChat
+  `needCode`), `/manifest.json` (LobeChat), `/api/v1/version` (Flowise), `/api/ping` + the
+  served SPA (AnythingLLM). No active inference request is ever sent to a UI.
 
 ## 5. Safety
 - MCP scripts issue only `initialize` and `*/list`; `tools/call` is never invoked.
@@ -120,5 +126,5 @@ Both are routinely deployed on dev ports bound to `0.0.0.0` with no authenticati
 | Item | State |
 |---|---|
 | MCP: `mcp-info`, `mcp-enum`, `mcp.lua`, mock, matrix | Done; field-tested vs FastMCP, server-everything, and live public servers |
-| Inference: `llm-info`, `llm.lua`, `mock_llm_server.py`, `run_llm_matrix.sh` | Done; order-independent + credentialed; active "hello" probe (on by default), Anthropic detection, model enumeration, error-condition fingerprinting, Prometheus `/metrics` leak, and LLM web UI / gateway detection; field-tested vs real Ollama and KoboldCpp; 45-check regression matrix passes |
+| Inference: `llm-info`, `llm.lua`, `mock_llm_server.py`, `run_llm_matrix.sh` | Done; order-independent + credentialed; active "hello" probe (on by default), Anthropic detection, model enumeration, error-condition fingerprinting, Prometheus `/metrics` leak, and AI web UI / gateway detection with access posture; field-tested vs real Ollama and KoboldCpp; 55-check regression matrix passes |
 | Upstream nmap PR + standalone repo | Repo public (`insidetrust/nmap-ai-recon`); MCP PR branch staged; submission on hold |

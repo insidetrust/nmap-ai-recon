@@ -3,7 +3,8 @@
 
 One framework per process, selected by the LLM_MODE env var (default: ollama):
   ollama | openai | vllm | vllm_stealth | sglang | tgi | tei | llamacpp | koboldcpp
-  | triton | torchserve | authed | anthropic | openwebui | librechat | anythingllm
+  | triton | torchserve | authed | anthropic
+  | openwebui | openwebui_open | librechat | nextchat | lobechat | flowise | anythingllm
 
 Usage:  LLM_MODE=vllm python3 mock_llm_server.py [port]      (default 8000)
 """
@@ -92,13 +93,24 @@ ROUTES = {
         {"modelName": "bert", "modelUrl": "bert.mar"},
     ]}},
     "authed": {},   # everything 401 unless a valid token is presented
-    # Web UIs / gateways: front-ends that proxy to a backend, not inference endpoints.
+    # Web UIs / gateways: front-ends that proxy to a backend, not inference endpoints. The
+    # access posture (open / self-registration / login) is read from each UI's config.
+    # Open WebUI with open self-registration (enable_signup true).
     "openwebui": {"/api/config": {"status": True, "name": "Open WebUI", "version": "0.5.20",
                                   "features": {"auth": True, "enable_signup": True}},
                   "/api/version": {"version": "0.5.20"}},
+    # Open WebUI with authentication disabled entirely (WEBUI_AUTH=false): fully open access.
+    "openwebui_open": {"/api/config": {"status": True, "name": "Open WebUI", "version": "0.5.20",
+                                       "features": {"auth": False, "enable_signup": False}}},
     "librechat": {"/api/config": {"appTitle": "LibreChat", "registrationEnabled": True,
                                   "emailLoginEnabled": True, "socialLogins": ["google", "github"],
                                   "serverDomain": "http://localhost:3080"}},
+    # NextChat / ChatGPT-Next-Web with no access code (needCode false): open use of the backend.
+    "nextchat": {"/api/config": {"needCode": False, "hideUserApiKey": False,
+                                 "disableGPT4": False, "customModels": ""}},
+    "lobechat": {"/manifest.json": {"name": "LobeChat", "short_name": "LobeChat",
+                                    "description": "LobeChat is an open-source AI chat framework"}},
+    "flowise": {"/api/v1/version": {"version": "2.2.0"}},
     "anythingllm": {"/api/ping": {"online": True},
                     "/": "<!doctype html><title>AnythingLLM</title><div id=app></div>"},
 }
