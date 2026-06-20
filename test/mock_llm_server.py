@@ -3,7 +3,7 @@
 
 One framework per process, selected by the LLM_MODE env var (default: ollama):
   ollama | openai | vllm | vllm_stealth | sglang | tgi | tei | llamacpp | koboldcpp
-  | triton | torchserve | authed | anthropic
+  | triton | torchserve | authed | anthropic | openwebui | librechat | anythingllm
 
 Usage:  LLM_MODE=vllm python3 mock_llm_server.py [port]      (default 8000)
 """
@@ -92,6 +92,15 @@ ROUTES = {
         {"modelName": "bert", "modelUrl": "bert.mar"},
     ]}},
     "authed": {},   # everything 401 unless a valid token is presented
+    # Web UIs / gateways: front-ends that proxy to a backend, not inference endpoints.
+    "openwebui": {"/api/config": {"status": True, "name": "Open WebUI", "version": "0.5.20",
+                                  "features": {"auth": True, "enable_signup": True}},
+                  "/api/version": {"version": "0.5.20"}},
+    "librechat": {"/api/config": {"appTitle": "LibreChat", "registrationEnabled": True,
+                                  "emailLoginEnabled": True, "socialLogins": ["google", "github"],
+                                  "serverDomain": "http://localhost:3080"}},
+    "anythingllm": {"/api/ping": {"online": True},
+                    "/": "<!doctype html><title>AnythingLLM</title><div id=app></div>"},
 }
 
 VALID_TOKEN = "Bearer test-llm-key-abc123"
