@@ -73,15 +73,18 @@ Both are routinely deployed on dev ports bound to `0.0.0.0` with no authenticati
   inference and to detect formats with **no list endpoint - notably Anthropic**
   (`/v1/messages`); `llm.probe=false` makes it strictly read-only. For list-less or
   list-disabled APIs it **enumerates models** by probing a small built-in set of known model
-  IDs (`200` vs `404 model-not-found`). Credentials via `llm.token` (Bearer) / `llm.header`
-  (e.g. `x-api-key`, session cookie) test authenticated APIs.
+  IDs (`200` vs `404 model-not-found`). It also fingerprints the stack from error-response
+  shapes (`{object:error}` vLLM, `{detail}` FastAPI/Starlette, `{error: model_not_found}`
+  canonical OpenAI), which refines a generic OpenAI match. Credentials via `llm.token`
+  (Bearer) / `llm.header` (e.g. `x-api-key`, session cookie) test authenticated APIs.
 - **`llm.lua`** - shared detection + probe library (detectors, auth, active hello probe,
   model enumeration).
 
 ### 3.3 Shared / test
 - `test/mock_mcp_server.py`, `test/mock_llm_server.py` - dependency-free mocks
   (one config/framework per process via env var).
-- `test/run_matrix.sh` - local regression matrix asserting expected output.
+- `test/run_matrix.sh` (MCP, 23 checks) and `test/run_llm_matrix.sh` (inference, 26 checks) -
+  local regression matrices asserting expected output.
 
 ## 4. On the wire
 
@@ -93,12 +96,15 @@ Both are routinely deployed on dev ports bound to `0.0.0.0` with no authenticati
 - **Inference**: read-only model-list / metadata endpoints - `GET /v1/models`
   (OpenAI-compatible catch-all), `/api/tags` + `/api/version` (Ollama), `/version` (vLLM),
   `/info` (TGI), `/props` (llama.cpp), `/v2` (Triton/KServe), `/models` (TorchServe).
-  Auth state from `200` vs `401/403`; `Server` header as a secondary fingerprint.
+  Auth state from `200` vs `401/403`; `Server` header as a secondary fingerprint. The active
+  probe adds `POST /v1/chat/completions` (a minimal hello, or a bogus model for the
+  error-shape fingerprint) and `POST /v1/messages` (Anthropic, which has no list endpoint).
 
 ## 5. Safety
 - MCP scripts issue only `initialize` and `*/list`; `tools/call` is never invoked.
-- `llm-info` requests only model-list / metadata / health endpoints; no inference is run.
-- `llm-probe` is explicitly `intrusive` and opt-in (it sends a minimal inference request).
+- `llm-info` detection is read-only; by default it also sends one minimal "hello" completion
+  to confirm inference and detect list-less APIs (`llm.probe=false` disables it).
+- The active probe and model-ID enumeration are bounded and for authorised assessments only.
 - Neutral default User-Agent (a UA containing "nmap" is WAF-blocked); honour timeouts.
 - Authorised testing only; findings are reported, not exploited.
 

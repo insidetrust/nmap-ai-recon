@@ -47,6 +47,7 @@ cookie) may be supplied to test an authenticated API. Shared logic lives in the 
 -- |   version: 0.3.14
 -- |   endpoint: /api/tags
 -- |   auth: NONE (unauthenticated)
+-- |   inference: confirmed (responded to a minimal hello)
 -- |   models (3): llama3:8b, qwen2.5:7b, nomic-embed-text:latest
 -- |_  SECURITY: unauthenticated inference API (Ollama) exposes 3 model(s); open to compute/cost abuse and model disclosure
 --
@@ -55,6 +56,7 @@ cookie) may be supplied to test an authenticated API. Shared logic lives in the 
 -- <elem key="version">0.3.14</elem>
 -- <elem key="endpoint">/api/tags</elem>
 -- <elem key="auth">NONE (unauthenticated)</elem>
+-- <elem key="inference">confirmed (responded to a minimal hello)</elem>
 -- <table key="models (3)">
 --   <elem>llama3:8b</elem>
 --   <elem>qwen2.5:7b</elem>

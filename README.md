@@ -31,9 +31,28 @@ The MCP scripts are **read-only**: only the handshake and `*/list` methods, neve
 sends a single minimal "hello" completion (`max_tokens=1`) to confirm the endpoint serves
 inference and to detect formats with no list endpoint - notably **Anthropic**
 (`/v1/messages`). It lists models from the list endpoints and, for list-less APIs,
-**enumerates** them by probing a small built-in set of known model IDs. `llm.probe=false`
-makes it strictly read-only. Credentials (`llm.token` bearer, or `llm.header` for an API
-key / session cookie) test authenticated APIs. **Authorised testing only.**
+**enumerates** them by probing a small built-in set of known model IDs. It also fingerprints
+the underlying stack from error-response shapes (a model-not-found error distinguishes vLLM
+from a canonical OpenAI server). `llm.probe=false` makes it strictly read-only. Credentials
+(`llm.token` bearer, or `llm.header` for an API key / session cookie) test authenticated
+APIs. **Authorised testing only.**
+
+Example output (an unauthenticated Ollama):
+
+```
+PORT      STATE SERVICE
+11434/tcp open  llm-api
+| llm-info:
+|   framework: Ollama
+|   version: 0.3.14
+|   auth: NONE (unauthenticated)
+|   inference: confirmed (responded to a minimal hello)
+|   models (3):
+|     llama3:8b
+|     qwen2.5:7b
+|     nomic-embed-text:latest
+|_  SECURITY: unauthenticated inference API (Ollama) exposes 3 model(s); open to compute/cost abuse and model disclosure
+```
 
 ### Field-tested against real servers
 Local frameworks:
