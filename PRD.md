@@ -81,24 +81,30 @@ MCP uses **JSON-RPC 2.0**. Two network transports exist:
   subsequent JSON-RPC.
 
 ### 3.3 Discovery & auth signals
-- `.well-known/mcp.json` - optional discovery document.
+- `.well-known/mcp.json` - optional discovery document (not probed; detection keys on the
+  `initialize` handshake).
 - OAuth 2.1 protected resources advertise `WWW-Authenticate: Bearer resource_metadata=...`
   and host `.well-known/oauth-protected-resource`.
 
 ## 4. Deliverables
 
 ### 4.1 `mcp-info.nse` - detection & fingerprint (categories: `discovery`, `safe`, `version`)
-Probes candidate paths with an `initialize` handshake (Streamable HTTP), falls back to a
-legacy `/sse` probe, and checks `.well-known/mcp.json`. On success reports transport,
-endpoint path, `serverInfo`, `protocolVersion`, advertised capabilities, session-id
-presence, and auth posture. Sets the service version via `-sV` integration.
+Probes candidate paths with an `initialize` handshake (Streamable HTTP) and falls back to a
+legacy `/sse` probe. For auth-gated servers it parses the OAuth 2.1 protected-resource
+metadata (RFC 9728, `.well-known/oauth-protected-resource`) to reveal the authorization
+server(s) and scopes. On success reports transport, endpoint path, `serverInfo`,
+`protocolVersion`, advertised capabilities, session-id presence, and auth posture. Sets the
+service version via `-sV` integration. An optional `mcp.token` bearer token enables
+authenticated enumeration of a gated server (still read-only).
 
 ### 4.2 `mcp-enum.nse` - attack-surface enumeration (categories: `discovery`, `safe`)
 Completes the handshake (handles session id + protocol-version header, SSE or JSON
 responses), then calls `tools/list`, `resources/list`, `resources/templates/list`, and
 `prompts/list`. Reports each tool's name + description (+ input-schema param names),
-resource URIs, and prompt names. Heuristically flags **dangerous tools** (exec/shell/eval/
-file write/delete/sql/http patterns) and **unauthenticated exposure** as security findings.
+resource URIs, and prompt names. Risk-assesses each tool across its name, description, **and
+JSON input schema**, bucketing findings into categories (code-exec, file-access,
+network/ssrf, sql/db, secrets, privileged), and flags **unauthenticated exposure** as a
+security finding.
 
 ### 4.3 `mcp.lua` (nselib helper, optional/refactor)
 Shared handshake + SSE-parsing + JSON-extraction helpers once both scripts stabilise.
@@ -119,7 +125,8 @@ for path in [ /mcp, /, /sse, /messages, /api/mcp, /mcp/v1, /rpc, /jsonrpc ]:
     else:
         GET path (Accept: text/event-stream)
         if SSE 'event: endpoint': -> MCP via legacy HTTP+SSE. Record.
-also: GET /.well-known/mcp.json -> discovery doc present
+on a Bearer challenge: GET /.well-known/oauth-protected-resource
+        -> record authorization server(s) + scopes (RFC 9728)
 ```
 
 Confidence is keyed on a valid JSON-RPC `initialize` result, not on path or banner, to keep
@@ -129,24 +136,26 @@ false positives near zero.
 
 ```
 PORT     STATE SERVICE
-8000/tcp open  http
+8000/tcp open  mcp
 | mcp-info:
 |   transport: streamable-http
 |   endpoint: /mcp
 |   protocolVersion: 2025-06-18
 |   server: acme-toolserver 1.4.2
-|   capabilities: tools, resources, prompts, logging
+|   capabilities: logging, prompts, resources, tools
 |   session: stateful (Mcp-Session-Id issued)
 |_  auth: NONE (unauthenticated)
 | mcp-enum:
+|   transport: streamable-http
+|   server: acme-toolserver 1.4.2 (protocol 2025-06-18)
 |   tools (4):
-|     run_command   - Execute a shell command on the host   [DANGEROUS]
-|     read_file     - Read a file from disk                  [DANGEROUS]
-|     search_web    - Search the web
-|     get_weather   - Get the weather for a city
+|     run_command [RISK: code-exec] - Execute a shell command on the host  (params: cmd*)
+|     read_file [RISK: file-access] - Read a file from disk  (params: path*)
+|     search_web - Search the web  (params: q)
+|     get_weather - Get the weather for a city  (params: city)
 |   resources (2): file:///etc/, db://customers
 |   prompts (1): summarize
-|_  SECURITY: unauthenticated server exposes 2 dangerous tool(s)
+|_  SECURITY: unauthenticated server exposes 2 risky tool(s) [code-exec, file-access]: run_command, read_file
 ```
 
 ## 7. CLI usage
@@ -154,11 +163,13 @@ PORT     STATE SERVICE
 ```
 nmap -p 8000,3000,8080 --script mcp-info <target>
 nmap -sV --script "mcp-info,mcp-enum" -p- <target>
-nmap --script mcp-info --script-args mcp.paths=/custom,mcp.tls=true <target>
+nmap --script mcp-enum --script-args mcp.paths=/mcp,mcp-enum.schemas=true <target>
 ```
 
-Script args: `mcp.paths` (override path list), `mcp.timeout`, `mcp.tls` (force https),
-`mcp-enum.schemas` (dump full input schemas).
+Script args: `mcp.paths` (override path list), `mcp.timeout`, `mcp.ua` (User-Agent),
+`mcp.sse_path` (legacy SSE path), `mcp.token` (bearer token for authenticated enumeration),
+`mcp.allports` (probe every open port), `mcp-enum.schemas` (dump full input schemas). TLS is
+auto-detected, so there is no force-https flag.
 
 ## 8. Security, safety & legal considerations
 - **Safe category:** scripts only call read-only/idempotent MCP methods (`initialize`,
