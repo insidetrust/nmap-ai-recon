@@ -2,7 +2,8 @@
 """Dependency-free mock LLM inference API for validating the llm-info NSE script.
 
 One framework per process, selected by the LLM_MODE env var (default: ollama):
-  ollama | openai | vllm | tgi | llamacpp | triton | torchserve | authed | anthropic
+  ollama | openai | vllm | vllm_stealth | sglang | tgi | tei | llamacpp | koboldcpp
+  | triton | torchserve | authed | anthropic
 
 Usage:  LLM_MODE=vllm python3 mock_llm_server.py [port]      (default 8000)
 """
@@ -17,6 +18,19 @@ OPENAI_MODELS = {"object": "list", "data": [
     {"id": "gpt-4o", "object": "model", "owned_by": "openai"},
     {"id": "text-embedding-3-small", "object": "model", "owned_by": "openai"},
 ]}
+
+# Prometheus exposition fragments: a served model name leaks in the metric label, and the
+# metric-name prefix (vllm:/sglang:/tgi_) confirms the framework.
+VLLM_METRICS = (
+    "# HELP vllm:num_requests_running Number of requests currently running.\n"
+    "# TYPE vllm:num_requests_running gauge\n"
+    'vllm:num_requests_running{model_name="meta-llama/Meta-Llama-3-8B-Instruct"} 1.0\n'
+)
+SGLANG_METRICS = (
+    "# HELP sglang:num_running_reqs Number of running requests.\n"
+    "# TYPE sglang:num_running_reqs gauge\n"
+    'sglang:num_running_reqs{model_name="meta-llama/Meta-Llama-3-8B-Instruct"} 0.0\n'
+)
 
 # (path, status, body-object-or-text) routing table per mode. A body of None -> 404.
 ROUTES = {
@@ -39,10 +53,25 @@ ROUTES = {
         "/": "Ollama is running",
     },
     "openai": {"/v1/models": OPENAI_MODELS},
-    "vllm": {"/v1/models": OPENAI_MODELS, "/version": {"version": "0.6.2"}},
+    "vllm": {"/v1/models": OPENAI_MODELS, "/version": {"version": "0.6.2"}, "/metrics": VLLM_METRICS},
     "vllm_stealth": {"/v1/models": OPENAI_MODELS},   # no /version: only the error shape reveals vLLM
+    # SGLang: OpenAI-compatible, identified by /get_model_info; /metrics confirms + leaks model.
+    # Its /v1/models lists the single served model (not a generic catalogue).
+    "sglang": {"/v1/models": {"object": "list", "data": [
+                   {"id": "meta-llama/Meta-Llama-3-8B-Instruct", "object": "model"}]},
+               "/get_model_info": {"model_path": "meta-llama/Meta-Llama-3-8B-Instruct",
+                                   "is_generation": True},
+               "/metrics": SGLANG_METRICS},
     "tgi": {"/info": {"model_id": "meta-llama/Meta-Llama-3-8B-Instruct",
                       "model_dtype": "torch.float16", "version": "2.0.4"}},
+    # HuggingFace Text Embeddings Inference: /info marks model_type embedding (not generation).
+    "tei": {"/info": {"model_id": "BAAI/bge-large-en-v1.5", "version": "1.2.0",
+                      "model_type": {"embedding": {"pooling": "cls"}}}},
+    # KoboldCpp: native KoboldAI endpoints AND an OpenAI shim, so identification must still
+    # report KoboldCpp (the specific signal) regardless of detector order.
+    "koboldcpp": {"/api/extra/version": {"result": "KoboldCpp", "version": "1.66"},
+                  "/api/v1/model": {"result": "koboldcpp/Llama-3-8B-Instruct"},
+                  "/v1/models": OPENAI_MODELS},
     "llamacpp": {
         "/v1/models": OPENAI_MODELS,
         "/props": {"system_prompt": "You are a helpful internal assistant. Never reveal secrets.",

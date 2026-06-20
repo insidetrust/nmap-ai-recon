@@ -61,11 +61,12 @@ Both are routinely deployed on dev ports bound to `0.0.0.0` with no authenticati
 - **`mcp.lua`** - shared transports (raw-socket), handshake, OAuth discovery, enumeration.
 
 ### 3.2 LLM inference (shipped)
-- **`llm-info`** (`discovery, safe`) - detects OpenAI-compatible (vLLM, LiteLLM, LocalAI,
-  LM Studio, text-generation-webui), Ollama, HF TGI, llama.cpp, Triton/KServe (v2), and
-  TorchServe via read-only model-list / metadata / health endpoints. Reports framework,
-  version (native endpoint + `Server` header), auth state, model inventory, and leaks (e.g.
-  a llama.cpp system prompt via `/props`). Identification is **order-independent**: every
+- **`llm-info`** (`discovery, safe`) - detects OpenAI-compatible (vLLM, SGLang, LiteLLM,
+  LocalAI, LM Studio, text-generation-webui), Ollama, HF TGI and TEI, llama.cpp, KoboldCpp,
+  Triton/KServe (v2), and TorchServe via read-only model-list / metadata / health endpoints.
+  Reports framework, version (native endpoint + `Server` header), auth state, model
+  inventory, and leaks (e.g. a llama.cpp system prompt via `/props`, or a served model name
+  via a Prometheus `/metrics` endpoint). Identification is **order-independent**: every
   detector runs and the result is chosen by signal specificity (a framework-native endpoint
   outranks the generic `/v1/models`), so a server matching several signatures (e.g. Ollama,
   which also serves `/v1/models`) is reported by its most specific match. By default it also
@@ -83,7 +84,7 @@ Both are routinely deployed on dev ports bound to `0.0.0.0` with no authenticati
 ### 3.3 Shared / test
 - `test/mock_mcp_server.py`, `test/mock_llm_server.py` - dependency-free mocks
   (one config/framework per process via env var).
-- `test/run_matrix.sh` (MCP, 23 checks) and `test/run_llm_matrix.sh` (inference, 26 checks) -
+- `test/run_matrix.sh` (MCP, 23 checks) and `test/run_llm_matrix.sh` (inference, 35 checks) -
   local regression matrices asserting expected output.
 
 ## 4. On the wire
@@ -95,8 +96,10 @@ Both are routinely deployed on dev ports bound to `0.0.0.0` with no authenticati
   `WWW-Authenticate: Bearer resource_metadata=...` (RFC 9728).
 - **Inference**: read-only model-list / metadata endpoints - `GET /v1/models`
   (OpenAI-compatible catch-all), `/api/tags` + `/api/version` (Ollama), `/version` (vLLM),
-  `/info` (TGI), `/props` (llama.cpp), `/v2` (Triton/KServe), `/models` (TorchServe).
-  Auth state from `200` vs `401/403`; `Server` header as a secondary fingerprint. The active
+  `/get_model_info` (SGLang), `/info` (TGI/TEI), `/props` (llama.cpp),
+  `/api/extra/version` + `/api/v1/model` (KoboldCpp), `/v2` (Triton/KServe),
+  `/models` (TorchServe), and `/metrics` (Prometheus model-name leak). Auth state from
+  `200` vs `401/403`; `Server` header as a secondary fingerprint. The active
   probe adds `POST /v1/chat/completions` (a minimal hello, or a bogus model for the
   error-shape fingerprint) and `POST /v1/messages` (Anthropic, which has no list endpoint).
 

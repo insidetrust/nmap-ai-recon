@@ -8,11 +8,12 @@ description = [[
 Detects and fingerprints LLM inference APIs exposed over HTTP(S).
 
 Probes a target for the common self-hosted and cloud inference frameworks by their
-read-only model-list and metadata endpoints: the OpenAI-compatible API (vLLM, LiteLLM,
-LocalAI, LM Studio, text-generation-webui, and similar), Ollama, HuggingFace TGI, llama.cpp
-server, Triton/KServe (v2), and TorchServe. On a match it reports the framework, version,
-model inventory, authentication posture, and notable information leaks (e.g. a llama.cpp
-system prompt exposed via /props). It augments service/version detection via -sV.
+read-only model-list and metadata endpoints: the OpenAI-compatible API (vLLM, SGLang,
+LiteLLM, LocalAI, LM Studio, text-generation-webui, and similar), Ollama, HuggingFace TGI
+and TEI, llama.cpp server, KoboldCpp, Triton/KServe (v2), and TorchServe. On a match it
+reports the framework, version, model inventory, authentication posture, and notable
+information leaks (e.g. a llama.cpp system prompt exposed via /props, or a served model name
+exposed via a Prometheus /metrics endpoint). It augments service/version detection via -sV.
 
 By default the script also sends a single minimal "hello" completion request
 (max_tokens = 1) to confirm the endpoint actually serves inference and to detect formats

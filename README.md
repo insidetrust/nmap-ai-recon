@@ -24,7 +24,7 @@ The MCP scripts are **read-only**: only the handshake and `*/list` methods, neve
 ### LLM inference APIs
 | File | Category | What it does |
 |--------|----------|--------------|
-| `scripts/llm-info.nse` | `discovery, safe` | Detects OpenAI-compatible (vLLM, LiteLLM, LocalAI, LM Studio, text-generation-webui), Ollama, HF TGI, llama.cpp, Triton/KServe (v2), TorchServe, and **Anthropic** via read-only endpoints plus a minimal "hello" probe. Reports framework, version (native endpoint + `Server` header), auth state, model inventory (listed or **enumerated by probing known IDs**), and leaks (e.g. a llama.cpp system prompt). **Order-independent** identification. Feeds `-sV`. |
+| `scripts/llm-info.nse` | `discovery, safe` | Detects OpenAI-compatible (vLLM, SGLang, LiteLLM, LocalAI, LM Studio, text-generation-webui), Ollama, HF TGI and TEI, llama.cpp, KoboldCpp, Triton/KServe (v2), TorchServe, and **Anthropic** via read-only endpoints plus a minimal "hello" probe. Reports framework, version (native endpoint + `Server` header), auth state, model inventory (listed or **enumerated by probing known IDs**), and leaks (e.g. a llama.cpp system prompt, or a model name exposed via a Prometheus `/metrics` endpoint). **Order-independent** identification. Feeds `-sV`. |
 | `scripts/llm.lua` | nselib | Shared detection library for the inference frameworks. |
 
 `llm-info` keys detection on read-only model-list/metadata endpoints, and by default also
@@ -206,7 +206,8 @@ Either install the lib or use the `--datadir` harness above (omitted below for b
 assert the expected output. `run_matrix.sh` covers MCP (protocol versions, all three
 transports, both auth states; 23 checks); `run_llm_matrix.sh` covers the inference
 detector (every framework, order-independent identification, the hello probe, credentials,
-model listing + enumeration, and error-condition fingerprinting; 26 checks):
+model listing + enumeration, the Prometheus `/metrics` leak, and error-condition
+fingerprinting; 35 checks):
 
 ```bash
 test/run_matrix.sh        # MCP;       exits non-zero on any failure

@@ -2,10 +2,11 @@
 -- Shared library for fingerprinting LLM inference APIs exposed over HTTP(S).
 --
 -- Detects the common self-hosted and cloud inference frameworks by their read-only
--- model-list and metadata endpoints: the OpenAI-compatible API (vLLM, LiteLLM, LocalAI,
--- LM Studio, text-generation-webui, and similar), Ollama, HuggingFace TGI, llama.cpp
--- server, Triton/KServe (v2), and TorchServe. Reports the framework, version, model
--- inventory, authentication posture, and notable information leaks.
+-- model-list and metadata endpoints: the OpenAI-compatible API (vLLM, SGLang, LiteLLM,
+-- LocalAI, LM Studio, text-generation-webui, and similar), Ollama, HuggingFace TGI and TEI,
+-- llama.cpp server, KoboldCpp, Triton/KServe (v2), and TorchServe. Reports the framework,
+-- version, model inventory, authentication posture, and notable information leaks (including
+-- model names exposed via a Prometheus /metrics endpoint).
 --
 -- By default the library also sends a single minimal "hello" completion (max_tokens = 1)
 -- to confirm an endpoint serves inference and to detect formats with no model-list endpoint
@@ -29,9 +30,9 @@ _ENV = stdnse.module("llm", stdnse.seeall)
 DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
 -- Ports commonly hosting inference APIs (in addition to HTTP-fingerprinted ports).
--- 11434 Ollama, 8000 vLLM/TGI/Triton, 1234 LM Studio, 4000 LiteLLM, 8081 TorchServe mgmt,
--- 7860/5000 gradio web-UIs.
-PORTS = { 11434, 8000, 8080, 8081, 1234, 4000, 5000, 5001, 7860, 3000, 8888, 9000 }
+-- 11434 Ollama, 8000 vLLM/TGI/Triton, 30000 SGLang, 1234 LM Studio, 4000 LiteLLM,
+-- 5001 KoboldCpp, 8081 TorchServe mgmt, 7860/5000 gradio web-UIs.
+PORTS = { 11434, 8000, 8080, 8081, 1234, 4000, 5000, 5001, 7860, 3000, 8888, 9000, 30000 }
 local PORTS_SET = {}
 for _, p in ipairs(PORTS) do PORTS_SET[p] = true end
 
@@ -139,11 +140,16 @@ local function detect_openai(host, port, opts)
   local vd = jparse(vb)
   if vd and vd.version then r.framework = "vLLM (OpenAI-compatible)"; r.version = vd.version; r.confidence = 85 end
 
-  -- HuggingFace TGI: GET /info -> {"model_id": ..., "version": ...}
+  -- HuggingFace TGI / TEI: GET /info -> {"model_id": ..., "version": ...}. A model_type of
+  -- "embedding" identifies Text Embeddings Inference rather than text generation.
   local _, ib = get(host, port, "/info", opts)
   local idoc = jparse(ib)
   if idoc and idoc.model_id then
-    r.framework = "HF text-generation-inference"
+    if type(idoc.model_type) == "table" and idoc.model_type.embedding then
+      r.framework = "HF text-embeddings-inference"
+    else
+      r.framework = "HF text-generation-inference"
+    end
     r.version = idoc.version or r.version
     if #r.models == 0 then r.models = { idoc.model_id } end
     r.confidence = 85
@@ -160,17 +166,52 @@ local function detect_openai(host, port, opts)
       r.leaks[#r.leaks + 1] = "system prompt disclosed via /props"
     end
   end
+
+  -- SGLang: GET /get_model_info -> {"model_path": ..., "is_generation": ...}
+  local _, gb = get(host, port, "/get_model_info", opts)
+  local gdoc = jparse(gb)
+  if gdoc and gdoc.model_path then
+    r.framework = "SGLang (OpenAI-compatible)"
+    r.confidence = 85
+    if #r.models == 0 then r.models = { gdoc.model_path } end
+  end
   return r
 end
 
--- HuggingFace TGI without an OpenAI shim (older builds): GET /info.
+-- HuggingFace TGI / TEI without an OpenAI shim (older builds): GET /info. A model_type of
+-- "embedding" marks the Text Embeddings Inference server rather than text generation.
 local function detect_tgi(host, port, opts)
   local st, body = get(host, port, "/info", opts)
   if st == 200 then
     local doc = jparse(body)
     if doc and doc.model_id then
-      return { framework = "HF text-generation-inference", endpoint = "/info",
+      local fw = "HF text-generation-inference"
+      if type(doc.model_type) == "table" and doc.model_type.embedding then
+        fw = "HF text-embeddings-inference"
+      end
+      return { framework = fw, endpoint = "/info",
                version = doc.version, models = { doc.model_id }, auth_required = false, confidence = 85 }
+    end
+  end
+  return nil
+end
+
+-- KoboldCpp / KoboldAI United: GET /api/extra/version -> {"result":"KoboldCpp","version":...};
+-- /api/v1/model names the loaded model. Modern builds also expose an OpenAI shim, so this is
+-- scored above the generic OpenAI match to keep identification order-independent.
+local function detect_koboldcpp(host, port, opts)
+  local st, body = get(host, port, "/api/extra/version", opts)
+  if st == 200 then
+    local doc = jparse(body)
+    if doc and type(doc.result) == "string" and doc.result:find("Kobold", 1, true) then
+      local r = { framework = "KoboldCpp", endpoint = "/api/extra/version",
+                  version = doc.version, models = {}, auth_required = false, confidence = 88 }
+      local _, mb = get(host, port, "/api/v1/model", opts)
+      local md = jparse(mb)
+      if md and type(md.result) == "string" then
+        r.models = { (md.result:gsub("^koboldcpp/", "")) }
+      end
+      return r
     end
   end
   return nil
@@ -227,7 +268,8 @@ local function detect_torchserve(host, port, opts)
 end
 
 local DETECTORS = {
-  detect_ollama, detect_openai, detect_tgi, detect_llamacpp, detect_triton, detect_torchserve,
+  detect_ollama, detect_openai, detect_tgi, detect_llamacpp, detect_koboldcpp,
+  detect_triton, detect_torchserve,
 }
 
 --------------------------------------------------------------------------------
@@ -356,6 +398,24 @@ local function refine_by_error(host, port, opts)
   return nil
 end
 
+-- Prometheus /metrics, exposed by several frameworks (vLLM, TGI, SGLang), frequently leaks the
+-- served model name in a metric label and confirms the framework from the metric-name prefix.
+-- Read-only GET. Returns { models={}, framework? } or nil.
+local function scan_metrics(host, port, opts)
+  local st, body = get(host, port, "/metrics", opts)
+  if st ~= 200 or not body or body == "" then return nil end
+  if not (body:find("model_name=", 1, true) or body:find("# TYPE", 1, true)) then return nil end
+  local out = { models = {} }
+  local seen = {}
+  for m in body:gmatch('model_name="([^"]+)"') do
+    if not seen[m] then seen[m] = true; out.models[#out.models + 1] = m end
+  end
+  if body:find("vllm:", 1, true) then out.framework = "vLLM (OpenAI-compatible)"
+  elseif body:find("sglang:", 1, true) then out.framework = "SGLang (OpenAI-compatible)"
+  elseif body:find("tgi_", 1, true) then out.framework = "HF text-generation-inference" end
+  return out
+end
+
 -- Probe a host:port for a known inference API. Every detector runs; the result is chosen by
 -- signal specificity (the `confidence` each detector assigns), not by detector order, so a
 -- server matching several signatures (e.g. Ollama, which also serves /v1/models) is reported
@@ -424,6 +484,25 @@ function detect(host, port, opts)
         found = enum_openai(host, port, opts)
       end
       if found and #found > 0 then result.models = found; result.models_enumerated = true end
+    end
+  end
+
+  -- Prometheus metrics leak (read-only): for OpenAI-family servers, /metrics often exposes the
+  -- served model name and confirms the framework. Recorded as a leak and a model source.
+  if result and not result.auth_required and result.framework
+      and (result.framework:find("OpenAI", 1, true) or result.framework:find("vLLM", 1, true)
+           or result.framework:find("SGLang", 1, true) or result.framework:find("text-generation", 1, true)) then
+    local m = scan_metrics(host, port, opts)
+    if m then
+      if m.framework and result.framework == "OpenAI-compatible API" then
+        result.framework = m.framework
+        if (result.confidence or 0) < 60 then result.confidence = 60 end
+      end
+      if #m.models > 0 then
+        result.leaks = result.leaks or {}
+        result.leaks[#result.leaks + 1] = "model name disclosed via /metrics"
+        if not result.models or #result.models == 0 then result.models = m.models end
+      end
     end
   end
 

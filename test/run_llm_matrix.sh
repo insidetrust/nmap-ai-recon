@@ -44,11 +44,21 @@ start tgi;        o=$(scan); check "tgi"        "framework: HF text-generation-i
 start llamacpp;   o=$(scan); check "llamacpp"   "framework: llama.cpp server" "$o"; check "llamacpp leak" "system prompt" "$o"; stop
 start triton;     o=$(scan); check "triton"     "framework: Triton/KServe" "$o"; stop
 start torchserve; o=$(scan); check "torchserve" "framework: TorchServe" "$o"; stop
+start sglang;     o=$(scan); check "sglang"     "framework: SGLang" "$o"; check "sglang model" "meta-llama" "$o"; stop
+start koboldcpp;  o=$(scan); check "koboldcpp"  "framework: KoboldCpp" "$o"; check "kobold version" "version: 1.66" "$o"; stop
+start tei;        o=$(scan); check "tei"        "framework: HF text-embeddings-inference" "$o"; stop
 
 echo "== Order-independent identification =="
 start ollama; o=$(scan)
 check "ollama beats generic /v1/models" "framework: Ollama" "$o"
 absent "not mislabeled OpenAI" "framework: OpenAI" "$o"; stop
+start koboldcpp; o=$(scan)
+check "kobold beats generic /v1/models" "framework: KoboldCpp" "$o"
+absent "kobold not mislabeled OpenAI" "framework: OpenAI-compatible" "$o"; stop
+
+echo "== Prometheus /metrics model-name leak =="
+start vllm; o=$(scan); check "vllm /metrics leak" "model name disclosed via /metrics" "$o"; stop
+start sglang; o=$(scan); check "sglang /metrics leak" "model name disclosed via /metrics" "$o"; stop
 
 echo "== Active hello probe (on by default) =="
 start openai; o=$(scan); check "inference confirmed" "inference: confirmed" "$o"; stop
