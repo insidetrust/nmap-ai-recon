@@ -24,14 +24,16 @@ The MCP scripts are **read-only**: only the handshake and `*/list` methods, neve
 ### LLM inference APIs
 | File | Category | What it does |
 |--------|----------|--------------|
-| `scripts/llm-info.nse` | `discovery, safe, version` | Detects OpenAI-compatible (vLLM, LiteLLM, LocalAI, LM Studio, text-generation-webui), Ollama, HF TGI, llama.cpp, Triton/KServe (v2), and TorchServe via read-only model-list/metadata endpoints. Reports framework, version (native endpoint + `Server` header), auth state, model inventory, and leaks (e.g. a llama.cpp system prompt). Identification is **order-independent** (specificity-scored). Feeds `-sV`. |
+| `scripts/llm-info.nse` | `discovery, safe` | Detects OpenAI-compatible (vLLM, LiteLLM, LocalAI, LM Studio, text-generation-webui), Ollama, HF TGI, llama.cpp, Triton/KServe (v2), TorchServe, and **Anthropic** via read-only endpoints plus a minimal "hello" probe. Reports framework, version (native endpoint + `Server` header), auth state, model inventory (listed or **enumerated by probing known IDs**), and leaks (e.g. a llama.cpp system prompt). **Order-independent** identification. Feeds `-sV`. |
 | `scripts/llm.lua` | nselib | Shared detection library for the inference frameworks. |
 
-`llm-info` is **read-only and safe**: it requests only model-list/metadata/health endpoints
-and never sends an inference request, so no model is run. Credentials (`llm.token` bearer,
-or `llm.header` for an API key / session cookie) let it test authenticated APIs. An opt-in
-intrusive `llm-probe` (active inference probing, model enumeration, and Anthropic-format
-detection) is planned.
+`llm-info` keys detection on read-only model-list/metadata endpoints, and by default also
+sends a single minimal "hello" completion (`max_tokens=1`) to confirm the endpoint serves
+inference and to detect formats with no list endpoint - notably **Anthropic**
+(`/v1/messages`). It lists models from the list endpoints and, for list-less APIs,
+**enumerates** them by probing a small built-in set of known model IDs. `llm.probe=false`
+makes it strictly read-only. Credentials (`llm.token` bearer, or `llm.header` for an API
+key / session cookie) test authenticated APIs. **Authorised testing only.**
 
 ### Field-tested against real servers
 Local frameworks:

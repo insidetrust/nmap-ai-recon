@@ -2,7 +2,7 @@
 """Dependency-free mock LLM inference API for validating the llm-info NSE script.
 
 One framework per process, selected by the LLM_MODE env var (default: ollama):
-  ollama | openai | vllm | tgi | llamacpp | triton | torchserve | authed
+  ollama | openai | vllm | tgi | llamacpp | triton | torchserve | authed | anthropic
 
 Usage:  LLM_MODE=vllm python3 mock_llm_server.py [port]      (default 8000)
 """
@@ -93,6 +93,48 @@ class Handler(BaseHTTPRequestHandler):
         routes = ROUTES.get(MODE, {})
         if path in routes:
             return self._send(200, routes[path])
+        self.send_response(404)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def do_POST(self):
+        path = self.path.split("?", 1)[0].rstrip("/") or "/"
+        length = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(length) if length else b""
+        authed = (self.headers.get("Authorization") == VALID_TOKEN
+                  or self.headers.get("x-api-key") == "test-llm-key-abc123")
+
+        # Anthropic Messages API: 401 (Anthropic error shape) when unauthenticated; with a key,
+        # 200 for known model IDs and 404 not_found otherwise (so model enumeration is testable).
+        if MODE == "anthropic" and path == "/v1/messages":
+            if not authed:
+                return self._send(401, {"type": "error",
+                                        "error": {"type": "authentication_error", "message": "x-api-key required"}})
+            try:
+                model = json.loads(raw or b"{}").get("model", "")
+            except Exception:
+                model = ""
+            if model in ("claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"):
+                return self._send(200, {"type": "message", "role": "assistant", "model": model,
+                                        "content": [{"type": "text", "text": "Hi"}]})
+            return self._send(404, {"type": "error",
+                                    "error": {"type": "not_found_error", "message": "model not found"}})
+
+        # OpenAI-compatible chat completion (the hello probe confirms inference here).
+        if path == "/v1/chat/completions":
+            if MODE in ("openai", "vllm", "llamacpp"):
+                return self._send(200, {"object": "chat.completion",
+                                        "choices": [{"message": {"role": "assistant", "content": "Hi"}}]})
+            if MODE == "authed":
+                if authed:
+                    return self._send(200, {"object": "chat.completion",
+                                            "choices": [{"message": {"content": "Hi"}}]})
+                return self._send(401, {"error": {"message": "missing key"}})
+
+        # Ollama native generate.
+        if path == "/api/generate" and MODE == "ollama":
+            return self._send(200, {"model": "llama3", "response": "Hi", "done": True})
+
         self.send_response(404)
         self.send_header("Content-Length", "0")
         self.end_headers()

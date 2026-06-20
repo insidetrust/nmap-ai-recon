@@ -14,10 +14,11 @@ server, Triton/KServe (v2), and TorchServe. On a match it reports the framework,
 model inventory, authentication posture, and notable information leaks (e.g. a llama.cpp
 system prompt exposed via /props). It augments service/version detection via -sV.
 
-This script is read-only and safe: it requests only model-list, metadata, and health
-endpoints. It never sends an inference request, so no model is run and no cost is incurred
-on the target. To actively confirm an API, test a credential, or enumerate models on an
-endpoint with no list (e.g. Anthropic), see the companion intrusive script llm-probe.
+By default the script also sends a single minimal "hello" completion request
+(max_tokens = 1) to confirm the endpoint actually serves inference and to detect formats
+with no model-list endpoint -- notably Anthropic's Messages API (/v1/messages). Pass
+llm.probe=false for strictly read-only detection (model-list / metadata / health endpoints
+only, no inference request).
 
 A bearer token (llm.token) or arbitrary header (llm.header, e.g. an API key or session
 cookie) may be supplied to test an authenticated API. Shared logic lives in the llm nselib.
@@ -32,6 +33,8 @@ cookie) may be supplied to test an authenticated API. Shared logic lives in the 
 -- @args llm.token   Bearer token, sent as "Authorization: Bearer <token>".
 -- @args llm.header  Arbitrary auth header "Name: value" (e.g. "x-api-key: sk-...",
 --                   "api-key: ...", "Cookie: session=..."), to test credentialed APIs.
+-- @args llm.probe   Send a minimal "hello" inference request to confirm the API and detect
+--                   list-less formats (Anthropic). Default true; set false for read-only.
 -- @args llm.timeout HTTP timeout in ms (default 7000).
 -- @args llm.ua      User-Agent to send (default a neutral browser UA).
 -- @args llm.allports Probe every open TCP port (ignore the port heuristic).
@@ -61,7 +64,7 @@ cookie) may be supplied to test an authenticated API. Shared logic lives in the 
 
 author = "Ben Williams <ben.williams@nccgroup.com>"
 license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
-categories = {"discovery", "safe", "version"}
+categories = {"discovery", "safe"}
 
 portrule = llm.portrule
 
@@ -87,8 +90,12 @@ action = function(host, port)
     out.auth = "NONE (unauthenticated)"
   end
 
+  if r.inference then out.inference = "confirmed (responded to a minimal hello)" end
+
   if r.models and #r.models > 0 then
-    out["models (" .. #r.models .. ")"] = r.models
+    local label = "models (" .. #r.models .. ")"
+    if r.models_enumerated then label = label .. " [enumerated by probing known IDs]" end
+    out[label] = r.models
   end
   if r.leaks and #r.leaks > 0 then
     out.leaks = r.leaks

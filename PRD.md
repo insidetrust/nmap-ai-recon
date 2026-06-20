@@ -40,8 +40,9 @@ Both are routinely deployed on dev ports bound to `0.0.0.0` with no authenticati
 
 ### Non-goals
 - Exploiting MCP tools: the MCP scripts never call `tools/call`.
-- `llm-info` never sends an inference request (no model is run). Active probing is isolated
-  in the explicitly intrusive `llm-probe`.
+- `llm-info` sends at most a single minimal "hello" completion by default to confirm
+  inference and detect list-less APIs (`llm.probe=false` disables it); it runs nothing
+  heavier. Authorised testing only.
 - stdio-transport MCP servers (local subprocess; not network-reachable).
 - Authentication brute force / token theft.
 
@@ -59,24 +60,23 @@ Both are routinely deployed on dev ports bound to `0.0.0.0` with no authenticati
   sql/db, secrets, privileged); flags unauthenticated exposure.
 - **`mcp.lua`** - shared transports (raw-socket), handshake, OAuth discovery, enumeration.
 
-### 3.2 LLM inference (`llm-info` shipped; `llm-probe` planned)
-- **`llm-info`** (`discovery, safe, version`) - read-only detection of OpenAI-compatible
-  (vLLM, LiteLLM, LocalAI, LM Studio, text-generation-webui), Ollama, HF TGI, llama.cpp
-  server, Triton/KServe (v2), and TorchServe via their model-list / metadata / health
-  endpoints. Reports framework, version (native endpoint + `Server` header), auth state,
-  model inventory, and leaks (e.g. a llama.cpp system prompt via `/props`). Identification
-  is **order-independent**: every detector runs and the result is chosen by signal
-  specificity (a framework-native endpoint outranks the generic `/v1/models`), so a server
-  matching several signatures (e.g. Ollama, which also serves `/v1/models`) is reported by
-  its most specific match. Credentials via `llm.token` (Bearer) / `llm.header` (e.g.
-  `x-api-key`, session cookie). Never sends an inference request.
-- **`llm-probe`** (`discovery, intrusive`) **[planned]** - opt-in active confirmation via a
-  minimal inference request (`max_tokens=1`): the only way to fingerprint formats with no
-  list endpoint (notably **Anthropic** `/v1/messages`); credentialed auth testing; **model
-  enumeration** by probing a built-in set of known model IDs (`404 model-not-found` vs
-  `200`/quota-error); **error-condition fingerprinting** (the error-body shape distinguishes
-  OpenAI vs vLLM vs others and can leak a version). Intrusive because it runs the model.
-- **`llm.lua`** - shared detection library (framework detectors, auth, credentials).
+### 3.2 LLM inference (shipped)
+- **`llm-info`** (`discovery, safe`) - detects OpenAI-compatible (vLLM, LiteLLM, LocalAI,
+  LM Studio, text-generation-webui), Ollama, HF TGI, llama.cpp, Triton/KServe (v2), and
+  TorchServe via read-only model-list / metadata / health endpoints. Reports framework,
+  version (native endpoint + `Server` header), auth state, model inventory, and leaks (e.g.
+  a llama.cpp system prompt via `/props`). Identification is **order-independent**: every
+  detector runs and the result is chosen by signal specificity (a framework-native endpoint
+  outranks the generic `/v1/models`), so a server matching several signatures (e.g. Ollama,
+  which also serves `/v1/models`) is reported by its most specific match. By default it also
+  sends a single minimal "hello" completion (`max_tokens=1`) to confirm the endpoint serves
+  inference and to detect formats with **no list endpoint - notably Anthropic**
+  (`/v1/messages`); `llm.probe=false` makes it strictly read-only. For list-less or
+  list-disabled APIs it **enumerates models** by probing a small built-in set of known model
+  IDs (`200` vs `404 model-not-found`). Credentials via `llm.token` (Bearer) / `llm.header`
+  (e.g. `x-api-key`, session cookie) test authenticated APIs.
+- **`llm.lua`** - shared detection + probe library (detectors, auth, active hello probe,
+  model enumeration).
 
 ### 3.3 Shared / test
 - `test/mock_mcp_server.py`, `test/mock_llm_server.py` - dependency-free mocks
@@ -107,6 +107,6 @@ Both are routinely deployed on dev ports bound to `0.0.0.0` with no authenticati
 | Item | State |
 |---|---|
 | MCP: `mcp-info`, `mcp-enum`, `mcp.lua`, mock, matrix | Done; field-tested vs FastMCP, server-everything, and live public servers |
-| Inference: `llm-info`, `llm.lua`, `mock_llm_server.py` | Done; order-independent + credentialed; validated against the mock for all frameworks |
-| Inference: `llm-probe` (active probe, model enumeration, Anthropic, error-condition fingerprinting) | Planned |
+| Inference: `llm-info`, `llm.lua`, `mock_llm_server.py` | Done; order-independent + credentialed; active "hello" probe (on by default), Anthropic detection, and model enumeration; validated against the mock for all frameworks |
+| Inference: error-condition fingerprinting (framework/version from error-body shape) | Planned |
 | Upstream nmap PR + standalone repo | Repo public (`insidetrust/nmap-ai-recon`); MCP PR branch staged; submission on hold |

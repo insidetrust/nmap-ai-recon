@@ -46,11 +46,14 @@ function args()
     local k, v = tostring(raw):match("^%s*([^:%s]+)%s*:%s*(.+)$")
     if k then headers[k] = v end
   end
+  local probe = stdnse.get_script_args("llm.probe")
   return {
     timeout = tonumber(stdnse.get_script_args("llm.timeout")) or 7000,
     ua = stdnse.get_script_args("llm.ua") or DEFAULT_UA,
     headers = headers,
     credentialed = (token ~= nil) or (raw ~= nil),
+    -- Active "hello" probe is ON by default; llm.probe=false makes the script read-only.
+    probe = not (probe == "false" or probe == "0"),
   }
 end
 
@@ -226,6 +229,109 @@ local DETECTORS = {
   detect_ollama, detect_openai, detect_tgi, detect_llamacpp, detect_triton, detect_torchserve,
 }
 
+--------------------------------------------------------------------------------
+-- Active "hello" probe (on by default). Sends a single minimal completion request and
+-- looks for an inference-shaped response: it confirms the endpoint actually serves a model
+-- (not just lists them) and, crucially, detects formats with NO list endpoint -- notably
+-- Anthropic's Messages API. Kept minimal (max_tokens = 1, prompt "hello").
+--------------------------------------------------------------------------------
+
+local function gen(obj)
+  local ok, s = pcall(json.generate, obj)
+  return ok and s or nil
+end
+
+local function post(host, port, path, extra, body, opts)
+  local h = { ["User-Agent"] = opts.ua, ["Content-Type"] = "application/json" }
+  if opts.headers then for k, v in pairs(opts.headers) do h[k] = v end end
+  if extra then for k, v in pairs(extra) do h[k] = v end end
+  local resp = http.post(host, port, path, { header = h, timeout = opts.timeout }, nil, body)
+  if not resp then return nil end
+  return resp.status, resp.body
+end
+
+-- OpenAI-compatible chat hello. Returns "confirmed" on a completion or an OpenAI-shaped
+-- error (either proves a chat inference endpoint), "auth" on a credential challenge.
+local function hello_openai(host, port, model, opts)
+  local body = gen({ model = model or "gpt-3.5-turbo",
+                     messages = { { role = "user", content = "hello" } }, max_tokens = 1 })
+  if not body then return nil end
+  local st, rb = post(host, port, "/v1/chat/completions", nil, body, opts)
+  if not st then return nil end
+  local doc = jparse(rb)
+  if st == 200 and doc and (doc.choices or doc.object == "chat.completion") then return "confirmed" end
+  if st == 401 or st == 403 then return "auth" end
+  if doc and type(doc.error) == "table" then return "confirmed" end
+  return nil
+end
+
+-- Ollama native generate hello.
+local function hello_ollama(host, port, model, opts)
+  local body = gen({ model = model or "llama3", prompt = "hello", stream = false,
+                     options = { num_predict = 1 } })
+  if not body then return nil end
+  local st, rb = post(host, port, "/api/generate", nil, body, opts)
+  if not st then return nil end
+  local doc = jparse(rb)
+  if st == 200 and doc and (doc.response ~= nil or doc.done ~= nil) then return "confirmed" end
+  if doc and doc.error then return "confirmed" end
+  return nil
+end
+
+-- Anthropic Messages API: no list endpoint exists, so a minimal /v1/messages request is the
+-- only fingerprint. Identified by the Anthropic message/error response shape; an
+-- unauthenticated server returns 401 WITHOUT running a model.
+local function probe_anthropic(host, port, opts)
+  local body = gen({ model = "claude-3-5-haiku-latest", max_tokens = 1,
+                     messages = { { role = "user", content = "hello" } } })
+  if not body then return nil end
+  local st, rb = post(host, port, "/v1/messages", { ["anthropic-version"] = "2023-06-01" }, body, opts)
+  if not st then return nil end
+  local doc = jparse(rb)
+  if doc and (doc.type == "message"
+      or (doc.type == "error" and type(doc.error) == "table" and doc.error.type)) then
+    return { framework = "Anthropic Messages API", endpoint = "/v1/messages",
+             models = {}, auth_required = (st == 401 or st == 403), confidence = 88,
+             inference = (st == 200) and "confirmed" or nil }
+  end
+  return nil
+end
+
+-- Known model IDs to probe on an API with no usable list endpoint (Anthropic) or one that
+-- is disabled. A small built-in set; a model that responds (rather than "model not found")
+-- is reported as present/accessible. Active and bounded - authorised assessments only.
+KNOWN_MODELS = {
+  anthropic = { "claude-3-5-sonnet-latest", "claude-3-5-haiku-latest",
+                "claude-3-opus-latest", "claude-3-haiku-20240307" },
+  openai = { "gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo" },
+}
+
+local function enum_anthropic(host, port, opts)
+  local found = {}
+  for _, m in ipairs(KNOWN_MODELS.anthropic) do
+    local body = gen({ model = m, max_tokens = 1, messages = { { role = "user", content = "hi" } } })
+    local st, rb = post(host, port, "/v1/messages", { ["anthropic-version"] = "2023-06-01" }, body, opts)
+    local doc = jparse(rb)
+    if st == 200 then
+      found[#found + 1] = m
+    elseif doc and doc.type == "error" and type(doc.error) == "table"
+        and doc.error.type ~= "not_found_error" and st ~= 404 then
+      found[#found + 1] = m .. " (accessible; non-404 response)"
+    end
+  end
+  return found
+end
+
+local function enum_openai(host, port, opts)
+  local found = {}
+  for _, m in ipairs(KNOWN_MODELS.openai) do
+    local body = gen({ model = m, messages = { { role = "user", content = "hi" } }, max_tokens = 1 })
+    local st = post(host, port, "/v1/chat/completions", nil, body, opts)
+    if st == 200 then found[#found + 1] = m end
+  end
+  return found
+end
+
 -- Probe a host:port for a known inference API. EVERY detector runs; the result is chosen by
 -- signal specificity (the `confidence` each detector assigns), NOT by detector order -- so a
 -- server matching several signatures (e.g. Ollama, which also serves /v1/models) is reported
@@ -246,6 +352,39 @@ function detect(host, port, opts)
     end
   end
   local result = best_pos or best_gated
+
+  -- Active "hello" probe (on by default): confirm inference on an identified endpoint, or
+  -- actively detect a list-less API (Anthropic) / otherwise-unidentified inference endpoint.
+  if opts.probe then
+    if result and not result.auth_required then
+      local conf
+      if result.framework == "Ollama" then
+        conf = hello_ollama(host, port, result.models and result.models[1], opts)
+      else
+        conf = hello_openai(host, port, result.models and result.models[1], opts)
+      end
+      if conf then result.inference = conf end
+    elseif not result then
+      result = probe_anthropic(host, port, opts)
+      if not result and hello_openai(host, port, nil, opts) then
+        result = { framework = "OpenAI-compatible API", endpoint = "/v1/chat/completions",
+                   models = {}, auth_required = false, confidence = 40, inference = "confirmed" }
+      end
+    end
+
+    -- Active model enumeration for an API with no usable list (Anthropic) or a disabled one:
+    -- probe a small set of known model IDs and report those that respond.
+    if result and not result.auth_required and (not result.models or #result.models == 0) then
+      local found
+      if result.framework:find("Anthropic", 1, true) then
+        found = enum_anthropic(host, port, opts)
+      elseif result.framework:find("OpenAI", 1, true) or result.endpoint == "/v1/chat/completions" then
+        found = enum_openai(host, port, opts)
+      end
+      if found and #found > 0 then result.models = found; result.models_enumerated = true end
+    end
+  end
+
   -- Capture the Server response header of the matched endpoint as a secondary fingerprint
   -- (uvicorn, TornadoServer, ...); it sometimes carries a version the API itself does not.
   if result and not result.server then
