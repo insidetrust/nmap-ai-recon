@@ -21,6 +21,14 @@ both classes.
 The MCP scripts are **read-only**: only the handshake and `*/list` methods, never
 `tools/call`, so no server-side tool is ever executed.
 
+**Gated servers that send no challenge.** The MCP authorization spec expects an
+unauthenticated request to be answered `401` with a `WWW-Authenticate` header
+naming the protected-resource metadata. Some hosted gateways do not: AWS Bedrock
+AgentCore answers `403` with a JSON-RPC error body and no challenge header at all.
+`mcp-info` identifies those from the JSON-RPC envelope instead, since an error
+object echoing the id just sent is proof of an MCP server whatever the status line
+says, and still resolves the OAuth metadata from the well-known path.
+
 ### LLM inference APIs
 | File | Category | What it does |
 |--------|----------|--------------|
