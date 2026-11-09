@@ -99,7 +99,18 @@ action = function(host, port)
     out.transport = "streamable-http"
     out.endpoint = auth.path
     out.auth = "REQUIRED (OAuth/Bearer)"
-    out.www_authenticate = auth.www
+    if auth.www then
+      out.www_authenticate = auth.www
+    else
+      -- No challenge header. Identification rested on the JSON-RPC error body,
+      -- so say that rather than leaving the reader to wonder what matched.
+      out.www_authenticate = "none sent (identified from the JSON-RPC error)"
+    end
+    if type(auth.rpc_error) == "table" and auth.rpc_error.message then
+      out.rpc_error = (auth.rpc_error.code and
+        ("[" .. tostring(auth.rpc_error.code) .. "] ") or "") ..
+        tostring(auth.rpc_error.message)
+    end
     local meta = mcp.fetch_oauth_metadata(host, port, auth.www, opts)
     if meta then
       if meta.resource then out.oauth_resource = meta.resource end

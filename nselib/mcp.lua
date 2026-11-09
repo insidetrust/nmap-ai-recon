@@ -496,6 +496,19 @@ local function open_streamable_path(host, port, path, opts)
     if (status == 401 or status == 403) and www and www:lower():find("bearer") then
       return nil, { path = path, www = www }
     end
+    -- Some hosted gateways reject an unauthenticated request without sending a
+    -- challenge header at all: AWS Bedrock AgentCore answers 403 with a
+    -- JSON-RPC error body and no WWW-Authenticate, so the check above never
+    -- fires and a real MCP server is reported as nothing.
+    --
+    -- A JSON-RPC envelope carrying an error object and echoing the id we just
+    -- sent is proof of an MCP server whatever the status line says, because no
+    -- unrelated service produces that by accident. The status is still what
+    -- decides that the server is gated rather than broken.
+    if (status == 401 or status == 403) and obj and obj.jsonrpc
+       and type(obj.error) == "table" then
+      return nil, { path = path, www = nil, rpc_error = obj.error }
+    end
   end
   return nil, nil
 end

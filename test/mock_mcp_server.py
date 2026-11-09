@@ -17,6 +17,10 @@ Implements enough of MCP's HTTP transports to validate detection + enumeration:
   OAuth-gated (auth posture test):
     POST /authmcp                            -> 401 + WWW-Authenticate: Bearer
                                                 resource_metadata=".../.well-known/..."
+    POST /gatedmcp                           -> 403 + JSON-RPC error, NO
+                                                WWW-Authenticate. Emulates a hosted
+                                                gateway (AWS Bedrock AgentCore), where
+                                                the only evidence of MCP is the body
     GET  /.well-known/oauth-protected-resource -> protected-resource metadata JSON
 
 Usage:  python3 mock_mcp_server.py [port]      (default 8000)
@@ -124,6 +128,27 @@ class Handler(BaseHTTPRequestHandler):
     # ----- POST: streamable handshake, legacy message channel, auth gate -----
     def do_POST(self):
         path = urlparse(self.path).path.rstrip("/") or "/"
+
+        # Gated endpoint that sends no challenge header. A hosted gateway may
+        # answer an unauthenticated request with 403 and a JSON-RPC error and
+        # nothing else, which leaves the body as the only evidence of MCP.
+        if path == "/gatedmcp":
+            auth = self.headers.get("Authorization", "")
+            if auth != f"Bearer {AUTH_TOKEN}":
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length) if length else b""
+                try:
+                    rid = json.loads(raw or b"{}").get("id")
+                except json.JSONDecodeError:
+                    rid = None
+                self._json(403, {
+                    "jsonrpc": "2.0",
+                    "id": rid,
+                    "error": {"code": -32002,
+                              "message": "Authorization error - Insufficient permissions"},
+                })
+                return
+            path = "/mcp"  # a valid token behaves exactly like the open endpoint
 
         # OAuth-gated endpoint: a valid bearer token completes the handshake like
         # /mcp; an absent/incorrect token gets a 401 challenge.
